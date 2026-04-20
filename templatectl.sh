@@ -57,6 +57,8 @@ declare -A NETWORK_CONFIG=(
 	[domain_names]="" # Domain names (space-separated, e.g., example.com internal.local)
 )
 
+declare -a MERGED_ARGS=() # Final merged arguments built from config defaults + CLI overrides
+
 # Template identification
 ID=""            # ID for the template
 URL=""           # Cloud Image URL
@@ -887,32 +889,14 @@ install_dependencies() {
 	fi
 }
 
-main() {
-	case "${1:-}" in
-	-h | --help)
-		usage
-		exit 0
-		;;
-	-V | --version)
-		print_version
-		exit 0
-		;;
-	esac
-
-	echo "--- Proxmox VE Template Creation Script ---"
-
-	# Install dependencies
-	install_dependencies
-
-	# Load externally defined patch functions
-	load_patches
+resolve_merged_args() {
 
 	# Extract --config from the argument list and build a merged argument set.
 	# Config values act as defaults; any CLI flag supplied after --config overrides them.
 	local config_file=""
 	local -a cli_flags=()
-	local -a merged_args=()
 	local skip_next=0
+	local arg
 
 	for arg in "$@"; do
 		if [[ "${skip_next}" == "1" ]]; then
@@ -950,13 +934,36 @@ main() {
 		build_args_from_config "${config_file}" config_args
 
 		# Merge config defaults first, then CLI overrides.
-		merged_args=("${config_args[@]+"${config_args[@]}"}" "${cli_flags[@]+"${cli_flags[@]}"}")
+		MERGED_ARGS=("${config_args[@]+"${config_args[@]}"}" "${cli_flags[@]+"${cli_flags[@]}"}")
 	else
-		merged_args=("${cli_flags[@]+"${cli_flags[@]}"}")
+		MERGED_ARGS=("${cli_flags[@]+"${cli_flags[@]}"}")
 	fi
+}
+
+main() {
+	case "${1:-}" in
+	-h | --help)
+		usage
+		exit 0
+		;;
+	-V | --version)
+		print_version
+		exit 0
+		;;
+	esac
+
+	echo "--- Proxmox VE Template Creation Script ---"
+
+	# Install dependencies
+	install_dependencies
+
+	# Load externally defined patch functions
+	load_patches
+
+	resolve_merged_args "$@"
 
 	# Parse and populate variables from command-line arguments
-	parse_arguments "${merged_args[@]}"
+	parse_arguments "${MERGED_ARGS[@]}"
 
 	# Validate arguments
 	validate_args
