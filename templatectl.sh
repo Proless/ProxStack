@@ -773,10 +773,13 @@ validate_distro() {
 # ==============================================================================
 
 download_image() {
-	local image_file
+	local image_dir image_file
 
-	# Extract filename from URL
-	image_file=$(basename "${URL}")
+	# Store images in a dedicated directory next to this script
+	image_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/images"
+	mkdir -p "${image_dir}"
+
+	image_file="${image_dir}/$(basename "${URL}")"
 
 	# Download if not already present
 	if [[ ! -f "${image_file}" ]]; then
