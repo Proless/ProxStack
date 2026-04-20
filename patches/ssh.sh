@@ -39,9 +39,8 @@ ssh_pwauth() {
 	# Signal cloud-init that password authentication should be enabled.
 	yq -i -y ".ssh_pwauth = true" "${vendor_data_file}"
 
-	# Configure SSH daemon auth in a high-priority drop-in to avoid cloud-init override conflicts.
+	# Write a high-priority drop-in so our settings win over any other drop-in files.
 	yq -i -y ".runcmd += [\"install -d -m 0755 /etc/ssh/sshd_config.d\"]" "${vendor_data_file}"
-	yq -i -y ".runcmd += [\"find /etc/ssh/sshd_config.d -maxdepth 1 -type f -name '*.conf' ! -name '00-proxstack-pwauth.conf' -exec sed -ri '/^\\s*#?\\s*(PasswordAuthentication|PermitRootLogin)\\s+/d' {} +\"]" "${vendor_data_file}"
 	yq -i -y ".runcmd += [\"printf 'PasswordAuthentication yes\\n' > ${ssh_dropin_file}\"]" "${vendor_data_file}"
 
 	# Only allow root password login when the cloud-init user is root.

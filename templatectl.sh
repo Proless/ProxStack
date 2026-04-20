@@ -92,14 +92,15 @@ die() {
 }
 
 usage() {
-	echo "Usage: $0 <url> <id> <name> [OPTIONS]"
+	echo "Usage: $0 --url <url> --id <id> --name <name> [OPTIONS]"
+	echo "       $0 --config <file|name> [OPTIONS]"
 	echo ""
 	echo "Creates a Proxmox VE template for a given Linux cloud image."
 	echo ""
-	echo "Arguments:"
-	echo "  url                            URL to the cloud image to use for the template (required)"
-	echo "  id                             ID for the template (required)"
-	echo "  name                           Name for the template (required)"
+	echo "Required options:"
+	echo "  --url <url>                    URL to the cloud image to use for the template"
+	echo "  --id <id>                      ID for the template"
+	echo "  --name <name>                  Name for the template"
 	echo ""
 	echo "Options:"
 	echo "  --user <user>                  Set the cloud-init user"
@@ -119,13 +120,14 @@ usage() {
 	echo "  --disk-format <format>         Disk format: ex. qcow2 (default)"
 	echo "  --disk-flags <flags>           Space-separated Disk flags (default: discard=on)"
 	echo "  --display <type>               Set the display/vga type (default: std)"
-	echo "  --install <packages>           Space-separated list of packages to install in the template using cloud-init"
+	echo "  --packages <packages>          Space-separated list of packages to install in the template using cloud-init"
 	echo "  --dns-servers <servers>        Space-separated DNS servers (e.g., '10.10.10.10 9.9.9.9')"
 	echo "  --domain-names <domains>       Space-separated domain names (e.g., 'example.com internal.local')"
 	echo "  --snippets-storage <storage>   Proxmox storage for cloud-init snippets (default: same as --disk-storage)"
 	echo "  --patches <patches>            Space-separated list of patch names to apply"
 	echo "  --script <file>                Local shell script to run as the last cloud-init runcmd step"
 	echo "  --reboot                       Reboot the VM after cloud-init has completed"
+	echo "  --config <file|name>           YAML config file path, or a template name resolved from templates/<name>.{yaml,yml}; CLI flags override config values"
 	echo "  -h,  --help                    Display this help message"
 	echo "  -V,  --version                 Display script version"
 
@@ -156,6 +158,84 @@ load_patches() {
 		source "${patch_file}"
 	done
 	shopt -u nullglob
+}
+
+build_args_from_config() {
+	local config_file="${1}"
+	local -n _out_args="${2}"
+	local val
+
+	# Helper: read a yq path and append a CLI flag+value if the key is present.
+	_cfg_flag() {
+		local yq_path="${1}" flag="${2}"
+		val="$(yq -r "${yq_path} // empty" "${config_file}")"
+		[[ -n "${val}" ]] && _out_args+=("${flag}" "${val}")
+	}
+
+	# Helper: read a yq path and append a boolean CLI flag if the key is true.
+	_cfg_bool() {
+		local yq_path="${1}" flag="${2}"
+		val="$(yq -r "${yq_path} // empty" "${config_file}")"
+		[[ "${val}" == "true" ]] && _out_args+=("${flag}")
+	}
+
+	# Helper: read a yq path as a YAML list and append a space-joined CLI flag+value.
+	_cfg_list_flag() {
+		local yq_path="${1}" flag="${2}" key_name="${3}" node_type
+		node_type="$(yq -r "${yq_path} | type" "${config_file}")"
+
+		if [[ "${node_type}" == "!!seq" ]]; then
+			val="$(yq -r "${yq_path} | join(\" \")" "${config_file}")"
+			[[ -n "${val}" ]] && _out_args+=("${flag}" "${val}")
+		elif [[ "${node_type}" != "!!null" ]]; then
+			die "Invalid config key '${key_name}': expected a YAML list"
+		fi
+	}
+
+	# Required options:
+	_cfg_flag '.url' "--url"
+	_cfg_flag '.id' "--id"
+	_cfg_flag '.name' "--name"
+
+	# vm:
+	_cfg_flag '.vm.memory' "--memory"
+	_cfg_flag '.vm.cores' "--cores"
+	_cfg_flag '.vm.bridge' "--bridge"
+	_cfg_flag '.vm.vlan' "--vlan"
+	_cfg_flag '.vm.display' "--display"
+
+	# disk:
+	_cfg_flag '.disk.storage' "--disk-storage"
+	_cfg_flag '.disk.size' "--disk-size"
+	_cfg_flag '.disk.format' "--disk-format"
+	_cfg_list_flag '.disk.flags' "--disk-flags" "disk.flags"
+	_cfg_flag '.disk["snippets-storage"]' "--snippets-storage"
+
+	# cloud-init:
+	_cfg_flag '.["cloud-init"].user' "--user"
+	_cfg_flag '.["cloud-init"].password' "--password"
+	_cfg_flag '.["cloud-init"]["ssh-keys"]' "--ssh-keys"
+	_cfg_flag '.["cloud-init"].script' "--script"
+	_cfg_bool '.["cloud-init"].reboot' "--reboot"
+
+	# packages:
+	_cfg_list_flag '.packages' "--packages" "packages"
+
+	# localization:
+	_cfg_flag '.localization.timezone' "--timezone"
+	_cfg_flag '.localization.keyboard' "--keyboard"
+	_cfg_flag '.localization["keyboard-variant"]' "--keyboard-variant"
+	_cfg_flag '.localization.locale' "--locale"
+
+	# network:
+	_cfg_list_flag '.network["dns-servers"]' "--dns-servers" "network.dns-servers"
+	_cfg_list_flag '.network["domain-names"]' "--domain-names" "network.domain-names"
+
+	# ssh:
+	_cfg_bool '.ssh.pwauth' "--ssh-pwauth"
+
+	# Top-level misc:
+	_cfg_list_flag '.patches' "--patches" "patches"
 }
 
 normalize_distro() {
@@ -551,29 +631,20 @@ parse_storage_config() {
 }
 
 parse_arguments() {
-	# Validate minimum arguments
-	if [[ "$#" -lt 3 ]]; then
-		usage
-		exit 1
-	fi
-
-	# Ensure first three arguments are not options
-	for argn in 1 2 3; do
-		arg="${!argn}"
-		if [[ "${arg}" == --* ]]; then
-			die "Argument ${argn} must be a value, not an option (got '${arg}')"
-		fi
-	done
-
-	# Set required positional arguments
-	URL="${1}"
-	ID="${2}"
-	NAME="${3}"
-	shift 3
-
-	# Parse optional arguments
 	while [[ "$#" -gt 0 ]]; do
 		case "${1}" in
+		--url)
+			URL="${2}"
+			shift 2
+			;;
+		--id)
+			ID="${2}"
+			shift 2
+			;;
+		--name)
+			NAME="${2}"
+			shift 2
+			;;
 		--user)
 			CI_CONFIG[user]="${2}"
 			shift 2
@@ -655,7 +726,7 @@ parse_arguments() {
 			SNIPPETS_STORAGE="${2}"
 			shift 2
 			;;
-		--install)
+		--packages)
 			PACKAGES_TO_INSTALL="${2}"
 			shift 2
 			;;
@@ -679,7 +750,9 @@ parse_arguments() {
 			print_version
 			exit 0
 			;;
-		*) break ;;
+		*)
+			die "Unknown option: ${1}"
+			;;
 		esac
 	done
 
@@ -697,13 +770,13 @@ parse_arguments() {
 
 validate_args() {
 	# Validate required parameters
-	require_arg_number "${ID}" "id (argument 2)"
+	require_arg_number "${ID}" "id (--id)"
 	if qm status "${ID}" &>/dev/null; then
 		die "ID ${ID} already exists. Please choose a different ID."
 	fi
 
-	require_arg_string "${URL}" "url (argument 1)"
-	require_arg_string "${NAME}" "name (argument 3)"
+	require_arg_string "${URL}" "url (--url)"
+	require_arg_string "${NAME}" "name (--name)"
 
 	require_arg_string "${DISK_CONFIG[storage]}" "disk storage (--disk-storage)"
 	require_arg_string "${DISK_CONFIG[format]}" "disk format (--disk-format)"
@@ -834,8 +907,56 @@ main() {
 	# Load externally defined patch functions
 	load_patches
 
+	# Extract --config from the argument list and build a merged argument set.
+	# Config values act as defaults; any CLI flag supplied after --config overrides them.
+	local config_file=""
+	local -a cli_flags=()
+	local -a merged_args=()
+	local skip_next=0
+
+	for arg in "$@"; do
+		if [[ "${skip_next}" == "1" ]]; then
+			config_file="${arg}"
+			skip_next=0
+			continue
+		fi
+		if [[ "${arg}" == "--config" ]]; then
+			skip_next=1
+			continue
+		fi
+		cli_flags+=("${arg}")
+	done
+
+	[[ "${skip_next}" == "1" ]] && die "Option --config requires a value"
+
+	if [[ -n "${config_file}" ]]; then
+		# If the value is not an existing file, treat it as a template name and
+		# look for <script-dir>/templates/<name>.yaml or .yml
+		if [[ ! -f "${config_file}" ]]; then
+			local script_dir templates_dir resolved=""
+			script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+			templates_dir="${script_dir}/templates"
+			if [[ -f "${templates_dir}/${config_file}.yaml" ]]; then
+				resolved="${templates_dir}/${config_file}.yaml"
+			elif [[ -f "${templates_dir}/${config_file}.yml" ]]; then
+				resolved="${templates_dir}/${config_file}.yml"
+			else
+				die "Config '${config_file}' not found as a file or as a template in ${templates_dir}"
+			fi
+			config_file="${resolved}"
+		fi
+
+		local -a config_args=()
+		build_args_from_config "${config_file}" config_args
+
+		# Merge config defaults first, then CLI overrides.
+		merged_args=("${config_args[@]+"${config_args[@]}"}" "${cli_flags[@]+"${cli_flags[@]}"}")
+	else
+		merged_args=("${cli_flags[@]+"${cli_flags[@]}"}")
+	fi
+
 	# Parse and populate variables from command-line arguments
-	parse_arguments "$@"
+	parse_arguments "${merged_args[@]}"
 
 	# Validate arguments
 	validate_args
