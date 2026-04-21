@@ -41,11 +41,11 @@ ssh_pwauth() {
 
 	# Write a high-priority drop-in so our settings win over any other drop-in files.
 	yq -i -y ".runcmd += [\"install -d -m 0755 /etc/ssh/sshd_config.d\"]" "${vendor_data_file}"
-	yq -i -y ".runcmd += [\"printf 'PasswordAuthentication yes\\n' > ${ssh_dropin_file}\"]" "${vendor_data_file}"
+	yq -i -y ".runcmd += [\"printf 'PasswordAuthentication yes\\\n' > ${ssh_dropin_file}\"]" "${vendor_data_file}"
 
 	# Only allow root password login when the cloud-init user is root.
-	if [[ "${CI_CONFIG[user]}" == "root" ]]; then
-		yq -i -y ".runcmd += [\"printf 'PermitRootLogin yes\\n' >> ${ssh_dropin_file}\"]" "${vendor_data_file}"
+	if [[ "${CLOUD_INIT_CONFIG[user]}" == "root" ]]; then
+		yq -i -y ".runcmd += [\"printf 'PermitRootLogin yes\\\n' >> ${ssh_dropin_file}\"]" "${vendor_data_file}"
 	fi
 
 	# Apply changed SSH daemon settings.
