@@ -134,7 +134,7 @@ usage() {
 	echo "  --display <type>               Set the display/vga type (default: std)"
 	echo "  --packages <packages>          Space-separated list of packages to install in the template using cloud-init"
 	echo "  --dns-servers <servers>        Space-separated DNS servers (e.g., '10.10.10.10 9.9.9.9')"
-	echo "  --domain-names <domains>       Space-separated domain names (e.g., 'example.com internal.local')"
+	echo "  --dns-domains <domains>       Space-separated domain names (e.g., 'example.com internal.local')"
 	echo "  --snippets-storage <storage>   Proxmox storage for cloud-init snippets (default: same as --disk-storage)"
 	echo "  --patches <patches>            Space-separated list of patch names to apply"
 	echo "  --script <file>                Local shell script to run as the last cloud-init runcmd step"
@@ -244,7 +244,7 @@ build_args_from_config() {
 	_cfg_flag '.network.bridge' "--bridge"
 	_cfg_flag '.network.vlan' "--vlan"
 	_cfg_list_flag '.network.dns.servers' "--dns-servers" "network.dns.servers"
-	_cfg_list_flag '.network.dns.domains' "--domain-names" "network.dns.domains"
+	_cfg_list_flag '.network.dns.domains' "--dns-domains" "network.dns.domains"
 
 	# ssh:
 	_cfg_bool '.ssh.pwauth' "--ssh-pwauth"
@@ -737,7 +737,7 @@ parse_arguments() {
 			DNS_CONFIG[servers]="${2}"
 			shift 2
 			;;
-		--domain-names)
+		--dns-domains)
 			DNS_CONFIG[domains]="${2}"
 			shift 2
 			;;
