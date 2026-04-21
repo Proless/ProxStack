@@ -9,7 +9,7 @@ locale() {
 	[[ -z "${LOCALIZATION_CONFIG[locale]}" ]] && return 0
 
 	case "${distro_family}" in
-	debian | ubuntu)
+	debian)
 		# Replace cloud-init locale key with explicit locale-gen workflow.
 		yq -i -y "del(.locale)" "${vendor_data_file}"
 		yq -i -y ".runcmd += [\"sed -i \\\"s/^# *\\\\(${LOCALIZATION_CONFIG[locale]}\\\\)/\\\\1/\\\" /etc/locale.gen\"]" "${vendor_data_file}"

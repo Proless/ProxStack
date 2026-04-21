@@ -9,7 +9,7 @@ keyboard() {
 	[[ -z "${LOCALIZATION_CONFIG[keyboard]}" ]] && return 0
 
 	case "${distro_family}" in
-	debian | ubuntu)
+	debian)
 		# Replace cloud-init keyboard block with distro-specific setup steps.
 		yq -i -y "del(.keyboard)" "${vendor_data_file}"
 		yq -i -y ".packages += [\"keyboard-configuration\"]" "${vendor_data_file}"
