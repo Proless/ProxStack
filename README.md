@@ -1,6 +1,6 @@
 ﻿# ProxStack
 
-ProxStack is a collection of bash scripts for managing Proxmox VE automation.
+ProxStack is a an collection of scripts and workflows for managing Proxmox VE.
 
 ## Repository Layout
 
@@ -61,6 +61,7 @@ Provide these on CLI, or via the config file keys `url`, `id`, and `name`.
 | `--vlan <id>`                  | VLAN tag for VM network interface (1-4094)                                                                              | (none)                   |
 | `--memory <mb>`                | Memory in MB                                                                                                            | `2048`                   |
 | `--cores <num>`                | Number of CPU cores                                                                                                     | `4`                      |
+| `--cpu <type>`                 | CPU type for VM                                                                                                         | `x86-64-v2-AES`          |
 | `--timezone <timezone>`        | Timezone (e.g., America/New_York, Europe/London)                                                                        | (none)                   |
 | `--keyboard <layout>`          | Keyboard layout (e.g., us, uk, de)                                                                                      | (none)                   |
 | `--keyboard-variant <variant>` | Keyboard variant (e.g., intl)                                                                                           | (none)                   |
@@ -74,7 +75,7 @@ Provide these on CLI, or via the config file keys `url`, `id`, and `name`.
 | `--display <type>`             | Set the display/vga type                                                                                                | `std`                    |
 | `--packages <packages>`        | Space-separated list of packages to install in the template using cloud-init                                            | (none)                   |
 | `--dns-servers <servers>`      | Space-separated DNS servers (e.g., '10.10.10.10 9.9.9.9')                                                               | (none)                   |
-| `--domain-names <domains>`     | Space-separated domain names (e.g., 'example.com internal.local')                                                       | (none)                   |
+| `--dns-domains <domains>`      | Space-separated domain names (e.g., 'example.com internal.local')                                                       | (none)                   |
 | `--snippets-storage <storage>` | Proxmox storage for cloud-init snippets                                                                                 | same as `--disk-storage` |
 | `--patches <patches>`          | Space-separated list of patch names to apply                                                                            | (none)                   |
 | `--script <file>`              | Local shell script to run as the last cloud-init runcmd step                                                            | (none)                   |
@@ -114,8 +115,7 @@ name: ubuntu24-template
 vm:
   memory: 4096 # MB
   cores: 4
-  bridge: vmbr0
-  vlan: 100 # omit to disable VLAN tagging
+  cpu: x86-64-v2-AES
   display: std
 
 # --- Disk ---
@@ -126,7 +126,10 @@ disk:
   flags:
     - discard=on
     - ssd=1
-  snippets-storage: local # omit to use same storage as disk.storage
+
+# --- Snippets ---
+snippets:
+  storage: local # omit to use same storage as disk.storage
 
 # --- Cloud-init ---
 cloud-init:
@@ -150,11 +153,14 @@ localization:
 
 # --- Network ---
 network:
-  dns-servers:
-    - 1.1.1.1
-    - 8.8.8.8
-  domain-names:
-    - home.arpa
+  bridge: vmbr0
+  vlan: 100 # omit to disable VLAN tagging
+  dns:
+    servers:
+      - 1.1.1.1
+      - 8.8.8.8
+    domains:
+      - home.arpa
 
 # --- SSH ---
 ssh:
@@ -242,7 +248,7 @@ patch_fn <vendor_data_file> <image_file> <distro> <distro_family>
   --keyboard de --keyboard-variant nodeadkeys \
   --locale de_DE.UTF-8 \
   --dns-servers "1.1.1.1 8.8.8.8" \
-  --domain-names "home.arpa" \
+  --dns-domains "home.arpa" \
   --packages "git nginx" \
   --ssh-pwauth \
   --script ./ci-script.sh \

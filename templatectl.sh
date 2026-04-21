@@ -21,11 +21,10 @@ declare -A SNIPPETS_STORAGE_CONFIG=()
 
 # VM hardware configuration
 declare -A VM_CONFIG=(
-	[memory]="2048"  # Memory in MB (default: 2048)
-	[cores]="4"      # Number of CPU cores (default: 4)
-	[bridge]="vmbr0" # The Proxmox network bridge for the VM (default: vmbr0)
-	[vlan]=""        # Optional VLAN tag for net0 (1-4094)
-	[display]="std"  # Display type (e.g., std, cirrus, vmware, qxl)
+	[memory]="2048"       # Memory in MB (default: 2048)
+	[cores]="4"           # Number of CPU cores (default: 4)
+	[cpu]="x86-64-v2-AES" # CPU type (default: x86-64-v2-AES)
+	[display]="std"       # Display type (e.g., std, cirrus, vmware, qxl)
 )
 
 # Disk configuration
@@ -36,25 +35,36 @@ declare -A DISK_CONFIG=(
 	[storage]="local-lvm" # The Proxmox storage where the VM disk will be allocated (default: local-lvm)
 )
 
-# Cloud-Init configuration
-declare -A CI_CONFIG=(
-	[user]=""     # Cloud-Init user
-	[password]="" # Cloud-Init password
-	[ssh_keys]="" # Path to file with public SSH keys
+# Cloud-init configuration
+declare -A CLOUD_INIT_CONFIG=(
+	[user]=""       # Cloud-init user
+	[password]=""   # Cloud-init password
+	["ssh-keys"]="" # Path to file with public SSH keys
 )
 
 # Localization configuration
-declare -A LOCALE_CONFIG=(
-	[timezone]=""         # Timezone
-	[keyboard]=""         # Keyboard layout
-	[keyboard_variant]="" # Keyboard variant
-	[locale]=""           # Locale
+declare -A LOCALIZATION_CONFIG=(
+	[timezone]=""           # Timezone
+	[keyboard]=""           # Keyboard layout
+	["keyboard-variant"]="" # Keyboard variant
+	[locale]=""             # Locale
 )
 
 # Network configuration
 declare -A NETWORK_CONFIG=(
-	[dns_servers]=""  # DNS servers (space-separated, e.g., 8.8.8.8 8.8.4.4)
-	[domain_names]="" # Domain names (space-separated, e.g., example.com internal.local)
+	[bridge]="vmbr0" # The Proxmox network bridge for the VM (default: vmbr0)
+	[vlan]=""        # Optional VLAN tag for net0 (1-4094)
+)
+
+# Network DNS configuration
+declare -A DNS_CONFIG=(
+	[servers]="" # DNS servers
+	[domains]="" # Domain search domains
+)
+
+# Snippets configuration
+declare -A SNIPPETS_CONFIG=(
+	[storage]="" # Storage where snippets are stored (default: same as DISK_CONFIG[storage])
 )
 
 declare -a MERGED_ARGS=() # Final merged arguments built from config defaults + CLI overrides
@@ -70,7 +80,6 @@ DISTRO_FAMILY="" # Normalized distro family used for feature selection
 # Advanced options
 PACKAGES_TO_INSTALL=""          # Space-separated list of packages to install inside the VM template
 PATCHES_TO_APPLY=""             # Space-separated list of patches to apply
-SNIPPETS_STORAGE=""             # Storage where snippets are stored (default: same as DISK_CONFIG[storage])
 SCRIPT_FILE=""                  # Local script file to write via cloud-init and run as final runcmd step
 REBOOT_AFTER_CLOUD_INIT="false" # Reboot VM after cloud-init completes
 
@@ -111,6 +120,7 @@ usage() {
 	echo "  --vlan <id>                    VLAN tag for VM network interface (1-4094)"
 	echo "  --memory <mb>                  Memory in MB (default: 2048)"
 	echo "  --cores <num>                  Number of CPU cores (default: 4)"
+	echo "  --cpu <type>                   CPU type for VM (default: x86-64-v2-AES)"
 	echo "  --timezone <timezone>          Timezone (e.g., America/New_York, Europe/London)"
 	echo "  --keyboard <layout>            Keyboard layout (e.g., us, uk, de)"
 	echo "  --keyboard-variant <variant>   Keyboard variant (e.g., intl)"
@@ -202,8 +212,7 @@ build_args_from_config() {
 	# vm:
 	_cfg_flag '.vm.memory' "--memory"
 	_cfg_flag '.vm.cores' "--cores"
-	_cfg_flag '.vm.bridge' "--bridge"
-	_cfg_flag '.vm.vlan' "--vlan"
+	_cfg_flag '.vm.cpu' "--cpu"
 	_cfg_flag '.vm.display' "--display"
 
 	# disk:
@@ -211,7 +220,9 @@ build_args_from_config() {
 	_cfg_flag '.disk.size' "--disk-size"
 	_cfg_flag '.disk.format' "--disk-format"
 	_cfg_list_flag '.disk.flags' "--disk-flags" "disk.flags"
-	_cfg_flag '.disk["snippets-storage"]' "--snippets-storage"
+
+	# snippets:
+	_cfg_flag '.snippets.storage' "--snippets-storage"
 
 	# cloud-init:
 	_cfg_flag '.["cloud-init"].user' "--user"
@@ -230,8 +241,10 @@ build_args_from_config() {
 	_cfg_flag '.localization.locale' "--locale"
 
 	# network:
-	_cfg_list_flag '.network["dns-servers"]' "--dns-servers" "network.dns-servers"
-	_cfg_list_flag '.network["domain-names"]' "--domain-names" "network.domain-names"
+	_cfg_flag '.network.bridge' "--bridge"
+	_cfg_flag '.network.vlan' "--vlan"
+	_cfg_list_flag '.network.dns.servers' "--dns-servers" "network.dns.servers"
+	_cfg_list_flag '.network.dns.domains' "--domain-names" "network.dns.domains"
 
 	# ssh:
 	_cfg_bool '.ssh.pwauth' "--ssh-pwauth"
@@ -321,15 +334,15 @@ ci_add_localization() {
 	local vendor_data_file="${1}"
 
 	# Add locale configuration
-	[[ -n "${LOCALE_CONFIG[locale]}" ]] && yq -i -y ".locale = \"${LOCALE_CONFIG[locale]}\"" "${vendor_data_file}"
+	[[ -n "${LOCALIZATION_CONFIG[locale]}" ]] && yq -i -y ".locale = \"${LOCALIZATION_CONFIG[locale]}\"" "${vendor_data_file}"
 
 	# Add timezone configuration
-	[[ -n "${LOCALE_CONFIG[timezone]}" ]] && yq -i -y ".timezone = \"${LOCALE_CONFIG[timezone]}\"" "${vendor_data_file}"
+	[[ -n "${LOCALIZATION_CONFIG[timezone]}" ]] && yq -i -y ".timezone = \"${LOCALIZATION_CONFIG[timezone]}\"" "${vendor_data_file}"
 
 	# Add keyboard configuration
-	if [[ -n "${LOCALE_CONFIG[keyboard]}" ]]; then
-		yq -i -y ".keyboard.layout = \"${LOCALE_CONFIG[keyboard]}\"" "${vendor_data_file}"
-		[[ -n "${LOCALE_CONFIG[keyboard_variant]}" ]] && yq -i -y ".keyboard.variant = \"${LOCALE_CONFIG[keyboard_variant]}\"" "${vendor_data_file}"
+	if [[ -n "${LOCALIZATION_CONFIG[keyboard]}" ]]; then
+		yq -i -y ".keyboard.layout = \"${LOCALIZATION_CONFIG[keyboard]}\"" "${vendor_data_file}"
+		[[ -n "${LOCALIZATION_CONFIG["keyboard-variant"]}" ]] && yq -i -y ".keyboard.variant = \"${LOCALIZATION_CONFIG["keyboard-variant"]}\"" "${vendor_data_file}"
 	fi
 }
 
@@ -383,14 +396,14 @@ prepare_disk() {
 
 create_vm() {
 	local image_file="${1}"
-	local net0_config="virtio,macaddr=00:00:00:00:00:00,bridge=${VM_CONFIG[bridge]}"
+	local net0_config="virtio,macaddr=00:00:00:00:00:00,bridge=${NETWORK_CONFIG[bridge]}"
 
-	[[ -n "${VM_CONFIG[vlan]}" ]] && net0_config+=",tag=${VM_CONFIG[vlan]}"
+	[[ -n "${NETWORK_CONFIG[vlan]}" ]] && net0_config+=",tag=${NETWORK_CONFIG[vlan]}"
 
 	echo "Creating VM ${ID}..."
 	quiet_run qm create "${ID}" --name "${NAME}" \
 		--memory "${VM_CONFIG[memory]}" \
-		--cpu host \
+		--cpu "${VM_CONFIG[cpu]}" \
 		--cores "${VM_CONFIG[cores]}" \
 		--net0 "${net0_config}" \
 		--agent enabled=1 \
@@ -427,16 +440,16 @@ configure_vm() {
 	)
 
 	# Add DNS servers if specified
-	[[ -n "${NETWORK_CONFIG[dns_servers]}" ]] && qm_cmd+=(--nameserver "${NETWORK_CONFIG[dns_servers]}")
+	[[ -n "${DNS_CONFIG[servers]}" ]] && qm_cmd+=(--nameserver "${DNS_CONFIG[servers]}")
 
 	# Add search domain if specified
-	[[ -n "${NETWORK_CONFIG[domain_names]}" ]] && qm_cmd+=(--searchdomain "${NETWORK_CONFIG[domain_names]}")
+	[[ -n "${DNS_CONFIG[domains]}" ]] && qm_cmd+=(--searchdomain "${DNS_CONFIG[domains]}")
 
 	# Add cloud-init user settings if user is specified
-	if [[ -n "${CI_CONFIG[user]}" ]]; then
-		qm_cmd+=(--ciuser "${CI_CONFIG[user]}")
-		[[ -n "${CI_CONFIG[password]}" ]] && qm_cmd+=(--cipassword "${CI_CONFIG[password]}")
-		[[ -n "${CI_CONFIG[ssh_keys]}" ]] && qm_cmd+=(--sshkeys "${CI_CONFIG[ssh_keys]}")
+	if [[ -n "${CLOUD_INIT_CONFIG[user]}" ]]; then
+		qm_cmd+=(--ciuser "${CLOUD_INIT_CONFIG[user]}")
+		[[ -n "${CLOUD_INIT_CONFIG[password]}" ]] && qm_cmd+=(--cipassword "${CLOUD_INIT_CONFIG[password]}")
+		[[ -n "${CLOUD_INIT_CONFIG["ssh-keys"]}" ]] && qm_cmd+=(--sshkeys "${CLOUD_INIT_CONFIG["ssh-keys"]}")
 	fi
 
 	quiet_run "${qm_cmd[@]}"
@@ -648,11 +661,11 @@ parse_arguments() {
 			shift 2
 			;;
 		--user)
-			CI_CONFIG[user]="${2}"
+			CLOUD_INIT_CONFIG[user]="${2}"
 			shift 2
 			;;
 		--password)
-			CI_CONFIG[password]="${2}"
+			CLOUD_INIT_CONFIG[password]="${2}"
 			shift 2
 			;;
 		--memory)
@@ -663,12 +676,16 @@ parse_arguments() {
 			VM_CONFIG[cores]="${2}"
 			shift 2
 			;;
+		--cpu)
+			VM_CONFIG[cpu]="${2}"
+			shift 2
+			;;
 		--bridge)
-			VM_CONFIG[bridge]="${2}"
+			NETWORK_CONFIG[bridge]="${2}"
 			shift 2
 			;;
 		--vlan)
-			VM_CONFIG[vlan]="${2}"
+			NETWORK_CONFIG[vlan]="${2}"
 			shift 2
 			;;
 		--disk-size)
@@ -677,7 +694,7 @@ parse_arguments() {
 			;;
 		--disk-storage)
 			DISK_CONFIG[storage]="${2}"
-			SNIPPETS_STORAGE="${SNIPPETS_STORAGE:-${2}}"
+			SNIPPETS_CONFIG[storage]="${SNIPPETS_CONFIG[storage]:-${2}}"
 			shift 2
 			;;
 		--disk-format)
@@ -693,23 +710,23 @@ parse_arguments() {
 			shift 2
 			;;
 		--timezone)
-			LOCALE_CONFIG[timezone]="${2}"
+			LOCALIZATION_CONFIG[timezone]="${2}"
 			shift 2
 			;;
 		--keyboard)
-			LOCALE_CONFIG[keyboard]="${2}"
+			LOCALIZATION_CONFIG[keyboard]="${2}"
 			shift 2
 			;;
 		--keyboard-variant)
-			LOCALE_CONFIG[keyboard_variant]="${2}"
+			LOCALIZATION_CONFIG["keyboard-variant"]="${2}"
 			shift 2
 			;;
 		--locale)
-			LOCALE_CONFIG[locale]="${2}"
+			LOCALIZATION_CONFIG[locale]="${2}"
 			shift 2
 			;;
 		--ssh-keys)
-			CI_CONFIG[ssh_keys]="${2}"
+			CLOUD_INIT_CONFIG["ssh-keys"]="${2}"
 			shift 2
 			;;
 		--ssh-pwauth)
@@ -717,15 +734,15 @@ parse_arguments() {
 			shift
 			;;
 		--dns-servers)
-			NETWORK_CONFIG[dns_servers]="${2}"
+			DNS_CONFIG[servers]="${2}"
 			shift 2
 			;;
 		--domain-names)
-			NETWORK_CONFIG[domain_names]="${2}"
+			DNS_CONFIG[domains]="${2}"
 			shift 2
 			;;
 		--snippets-storage)
-			SNIPPETS_STORAGE="${2}"
+			SNIPPETS_CONFIG[storage]="${2}"
 			shift 2
 			;;
 		--packages)
@@ -760,13 +777,13 @@ parse_arguments() {
 
 	# Parse storage configuration
 	parse_storage_config "${DISK_CONFIG[storage]}" DISK_STORAGE_CONFIG
-	if [[ "${SNIPPETS_STORAGE}" == "${DISK_CONFIG[storage]}" ]]; then
+	if [[ "${SNIPPETS_CONFIG[storage]}" == "${DISK_CONFIG[storage]}" ]]; then
 		# Copy storage config
 		for key in "${!DISK_STORAGE_CONFIG[@]}"; do
 			SNIPPETS_STORAGE_CONFIG["${key}"]="${DISK_STORAGE_CONFIG[${key}]}"
 		done
 	else
-		parse_storage_config "${SNIPPETS_STORAGE}" SNIPPETS_STORAGE_CONFIG
+		parse_storage_config "${SNIPPETS_CONFIG[storage]}" SNIPPETS_STORAGE_CONFIG
 	fi
 }
 
@@ -782,26 +799,26 @@ validate_args() {
 
 	require_arg_string "${DISK_CONFIG[storage]}" "disk storage (--disk-storage)"
 	require_arg_string "${DISK_CONFIG[format]}" "disk format (--disk-format)"
-	require_arg_string "${VM_CONFIG[bridge]}" "network bridge (--bridge)"
+	require_arg_string "${NETWORK_CONFIG[bridge]}" "network bridge (--bridge)"
 
 	require_arg_number "${VM_CONFIG[memory]}" "memory (--memory)"
 	require_arg_number "${VM_CONFIG[cores]}" "cores (--cores)"
 
 	# Validate optional parameters
-	if [[ -n "${CI_CONFIG[user]}" ]]; then
-		if [[ -z "${CI_CONFIG[password]}" && -z "${CI_CONFIG[ssh_keys]}" ]]; then
+	if [[ -n "${CLOUD_INIT_CONFIG[user]}" ]]; then
+		if [[ -z "${CLOUD_INIT_CONFIG[password]}" && -z "${CLOUD_INIT_CONFIG["ssh-keys"]}" ]]; then
 			die "You must provide at least one of --password or --ssh-keys when --user is specified"
 		fi
 
 		# If SSH keys provided, check file existence
-		[[ -n "${CI_CONFIG[ssh_keys]}" ]] && require_arg_file "${CI_CONFIG[ssh_keys]}" "ssh keys (--ssh-keys)"
+		[[ -n "${CLOUD_INIT_CONFIG["ssh-keys"]}" ]] && require_arg_file "${CLOUD_INIT_CONFIG["ssh-keys"]}" "ssh keys (--ssh-keys)"
 	else
 		echo "Warning: No cloud-init user provided"
 	fi
 
 	[[ -n "${SCRIPT_FILE}" ]] && require_arg_file "${SCRIPT_FILE}" "script (--script)"
 
-	[[ -n "${VM_CONFIG[vlan]}" ]] && require_arg_vlan "${VM_CONFIG[vlan]}" "vlan (--vlan)"
+	[[ -n "${NETWORK_CONFIG[vlan]}" ]] && require_arg_vlan "${NETWORK_CONFIG[vlan]}" "vlan (--vlan)"
 }
 
 validate_storage() {
