@@ -18,18 +18,23 @@ get_ssh_service_name() {
 
 ssh() {
 	local vendor_data_file="${1}"
-	local image_file="${2}"
-	local distro="${3}"
+	#local image_file="${2}"
+	#local distro="${3}"
 	local distro_family="${4}"
 
 	# Enable SSH service on the target image.
-	enable_ssh "${vendor_data_file}" "${image_file}" "${distro}" "${distro_family}"
+	local ssh_service
+	ssh_service="$(get_ssh_service_name "${distro_family}")"
+
+	# Ensure SSH service is enabled and started.
+	yq -i -y ".runcmd += [\"systemctl enable ${ssh_service}\"]" "${vendor_data_file}"
+	yq -i -y ".runcmd += [\"systemctl start ${ssh_service}\"]" "${vendor_data_file}"
 }
 
 ssh_pwauth() {
 	local vendor_data_file="${1}"
-	local image_file="${2}"
-	local distro="${3}"
+	#local image_file="${2}"
+	#local distro="${3}"
 	local distro_family="${4}"
 	local ssh_service
 	local ssh_dropin_file="/etc/ssh/sshd_config.d/10-proxstack-pwauth.conf"
@@ -50,18 +55,4 @@ ssh_pwauth() {
 
 	# Apply changed SSH daemon settings.
 	yq -i -y ".runcmd += [\"systemctl restart ${ssh_service}\"]" "${vendor_data_file}"
-}
-
-enable_ssh() {
-	local vendor_data_file="${1}"
-	#local image_file="${2}"
-	#local distro="${3}"
-	local distro_family="${4}"
-
-	local ssh_service
-	ssh_service="$(get_ssh_service_name "${distro_family}")"
-
-	# Ensure SSH service is enabled and started.
-	yq -i -y ".runcmd += [\"systemctl enable ${ssh_service}\"]" "${vendor_data_file}"
-	yq -i -y ".runcmd += [\"systemctl start ${ssh_service}\"]" "${vendor_data_file}"
 }

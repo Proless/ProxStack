@@ -78,10 +78,10 @@ TIMEZONE=""         # Timezone
 LOCALE=""           # Locale
 
 # Advanced options
-PACKAGES=""    # Space-separated list of packages to install inside the VM template
-PATCHES=""     # Space-separated list of patches to apply
-SCRIPT=""      # Local script file to write via cloud-init and run as final runcmd step
-REBOOT="false" # Reboot VM after cloud-init completes
+PACKAGES=""                   # Space-separated list of packages to install inside the VM template
+PATCHES="ssh keyboard locale" # Space-separated list of patches to apply
+SCRIPT=""                     # Local script file to write via cloud-init and run as final runcmd step
+REBOOT="false"                # Reboot VM after cloud-init completes
 
 # Metadata
 VERBOSE_MODE="false"
@@ -973,12 +973,8 @@ normalize_distro() {
 apply_patches() {
 	local vendor_data_file="${1}"
 	local image_file="${2}"
-	local _patches="${PATCHES}"
 
-	# Built-in patches decide distro-specific behavior internally.
-	_patches+=" ssh keyboard locale"
-
-	IFS=' ' read -ra patches_array <<<"${_patches}"
+	IFS=' ' read -ra patches_array <<<"${PATCHES}"
 	for patch in "${patches_array[@]}"; do
 		if declare -f "${patch}" >/dev/null; then
 			echo "Applying patch ${patch}..."
