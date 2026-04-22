@@ -6,7 +6,7 @@ keyboard() {
 	#local distro="${3}"
 	local distro_family="${4}"
 
-	[[ -z "${LOCALIZATION_CONFIG[keyboard]}" ]] && return 0
+	[[ -z "${KEYBOARD_CONFIG[layout]}" ]] && return 0
 
 	case "${distro_family}" in
 	debian)
@@ -15,15 +15,15 @@ keyboard() {
 		yq -i -y ".packages += [\"keyboard-configuration\"]" "${vendor_data_file}"
 		yq -i -y ".packages += [\"console-setup\"]" "${vendor_data_file}"
 		yq -i -y ".runcmd += [\"sed -i -E \\\"s/^XKBMODEL.*/XKBMODEL=\\\"pc105\\\"/\\\" /etc/default/keyboard\"]" "${vendor_data_file}"
-		yq -i -y ".runcmd += [\"sed -i -E \\\"s/^XKBLAYOUT.*/XKBLAYOUT=\\\"${LOCALIZATION_CONFIG[keyboard]}\\\"/\\\" /etc/default/keyboard\"]" "${vendor_data_file}"
-		yq -i -y ".runcmd += [\"sed -i -E \\\"s/^XKBVARIANT.*/XKBVARIANT=\\\"${LOCALIZATION_CONFIG[keyboard_variant]}\\\"/\\\" /etc/default/keyboard\"]" "${vendor_data_file}"
+		yq -i -y ".runcmd += [\"sed -i -E \\\"s/^XKBLAYOUT.*/XKBLAYOUT=\\\"${KEYBOARD_CONFIG[layout]}\\\"/\\\" /etc/default/keyboard\"]" "${vendor_data_file}"
+		yq -i -y ".runcmd += [\"sed -i -E \\\"s/^XKBVARIANT.*/XKBVARIANT=\\\"${KEYBOARD_CONFIG[variant]}\\\"/\\\" /etc/default/keyboard\"]" "${vendor_data_file}"
 		yq -i -y ".runcmd += [\"dpkg-reconfigure -f noninteractive keyboard-configuration\"]" "${vendor_data_file}"
 		yq -i -y ".runcmd += [\"setupcon\"]" "${vendor_data_file}"
 		;;
 	fedora | rhel)
 		# Replace cloud-init keyboard block with localectl for RPM-based systems.
 		yq -i -y "del(.keyboard)" "${vendor_data_file}"
-		yq -i -y ".runcmd += [\"localectl set-keymap ${LOCALIZATION_CONFIG[keyboard]}\"]" "${vendor_data_file}"
+		yq -i -y ".runcmd += [\"localectl set-keymap ${KEYBOARD_CONFIG[layout]}\"]" "${vendor_data_file}"
 		;;
 	esac
 }

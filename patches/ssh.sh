@@ -32,7 +32,7 @@ ssh_pwauth() {
 	local distro="${3}"
 	local distro_family="${4}"
 	local ssh_service
-	local ssh_dropin_file="/etc/ssh/sshd_config.d/00-proxstack-pwauth.conf"
+	local ssh_dropin_file="/etc/ssh/sshd_config.d/10-proxstack-pwauth.conf"
 
 	ssh_service="$(get_ssh_service_name "${distro_family}")"
 
@@ -44,7 +44,7 @@ ssh_pwauth() {
 	yq -i -y ".runcmd += [\"printf 'PasswordAuthentication yes\\\n' > ${ssh_dropin_file}\"]" "${vendor_data_file}"
 
 	# Only allow root password login when the cloud-init user is root.
-	if [[ "${CLOUD_INIT_CONFIG[user]}" == "root" ]]; then
+	if [[ "${USER}" == "root" ]]; then
 		yq -i -y ".runcmd += [\"printf 'PermitRootLogin yes\\\n' >> ${ssh_dropin_file}\"]" "${vendor_data_file}"
 	fi
 

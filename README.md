@@ -57,18 +57,21 @@ Provide these on CLI, or via the config file keys `url`, `id`, and `name`.
 | `--name <name>`                | Name for the template                                                                                                   | (none)                   |
 | `--user <user>`                | Set the cloud-init user                                                                                                 | (none)                   |
 | `--password <password>`        | Set the cloud-init password                                                                                             | (none)                   |
-| `--bridge <bridge>`            | Network bridge for VM                                                                                                   | `vmbr0`                  |
-| `--vlan <id>`                  | VLAN tag for VM network interface (1-4094)                                                                              | (none)                   |
+| `--upgrade`                    | Enable cloud-init package upgrade behavior                                                                              | disabled (`0`)           |
+| `--net-bridge <bridge>`        | Network bridge for VM                                                                                                   | `vmbr0`                  |
+| `--net-vlan <id>`              | VLAN tag for VM network interface (1-4094)                                                                              | (none)                   |
 | `--memory <mb>`                | Memory in MB                                                                                                            | `2048`                   |
 | `--cores <num>`                | Number of CPU cores                                                                                                     | `4`                      |
 | `--cpu <type>`                 | CPU type for VM                                                                                                         | `x86-64-v2-AES`          |
+| `--disk-scsihw <type>`         | SCSI controller model (e.g., `virtio-scsi-single`, `virtio-scsi-pci`, `lsi`)                                            | `virtio-scsi-single`     |
 | `--timezone <timezone>`        | Timezone (e.g., America/New_York, Europe/London)                                                                        | (none)                   |
-| `--keyboard <layout>`          | Keyboard layout (e.g., us, uk, de)                                                                                      | (none)                   |
+| `--keyboard-layout <layout>`   | Keyboard layout (e.g., us, uk, de)                                                                                      | (none)                   |
 | `--keyboard-variant <variant>` | Keyboard variant (e.g., intl)                                                                                           | (none)                   |
 | `--locale <locale>`            | Locale (e.g., en_US.UTF-8, de_DE.UTF-8)                                                                                 | (none)                   |
 | `--ssh-keys <file>`            | Path to file with public SSH keys (one per line, OpenSSH format)                                                        | (none)                   |
 | `--ssh-pwauth`                 | Enable SSH password authentication; if `--user root`, also allow root password login                                    | disabled                 |
 | `--disk-size <size>`           | Disk size (e.g., 32G, 50G, 6144M)                                                                                       | image default            |
+| `--disk-bus <type>`            | Disk bus/controller type: `scsi`, `virtio`, `sata`, `ide`                                                               | `scsi`                   |
 | `--disk-storage <storage>`     | Proxmox storage for VM disk                                                                                             | `local-lvm`              |
 | `--disk-format <format>`       | Disk format: ex. qcow2 (default)                                                                                        | `qcow2`                  |
 | `--disk-flags <flags>`         | Space-separated Disk flags                                                                                              | `discard=on`             |
@@ -112,17 +115,18 @@ id: 9000
 name: ubuntu24-template
 
 # --- VM hardware ---
-vm:
-  memory: 4096 # MB
-  cores: 4
-  cpu: x86-64-v2-AES
-  display: std
+memory: 4096 # MB
+cores: 4
+cpu: x86-64-v2-AES
+display: std
 
 # --- Disk ---
 disk:
   storage: local-lvm
   size: 32G # omit to keep image default
+  bus: scsi # scsi (default), virtio, sata, ide
   format: qcow2
+  scsihw: virtio-scsi-single
   flags:
     - discard=on
     - ssd=1
@@ -131,13 +135,12 @@ disk:
 snippets:
   storage: local # omit to use same storage as disk.storage
 
-# --- Cloud-init ---
-cloud-init:
-  user: root
-  password: secret # at least one of password or ssh-keys required when user is set
-  ssh-keys: /root/.ssh/authorized_keys
-  script: ./ci-script.sh
-  reboot: true # boolean
+# --- Cloud-init-related top-level keys ---
+user: root
+password: secret # at least one of password or keys required when user is set
+upgrade: true # boolean; equivalent to --upgrade (default is false/disabled)
+script: /root/proxstack/ci-script.sh
+reboot: true # boolean
 
 # --- Packages ---
 packages:
@@ -145,25 +148,29 @@ packages:
   - nginx
 
 # --- Localization ---
-localization:
-  timezone: Europe/Berlin
-  keyboard: de
-  keyboard-variant: nodeadkeys
-  locale: de_DE.UTF-8
+timezone: Europe/Berlin
+locale: de_DE.UTF-8
+
+keyboard:
+  layout: de
+  variant: nodeadkeys
 
 # --- Network ---
-network:
+net:
   bridge: vmbr0
   vlan: 100 # omit to disable VLAN tagging
-  dns:
-    servers:
-      - 1.1.1.1
-      - 8.8.8.8
-    domains:
-      - home.arpa
+
+# --- DNS ---
+dns:
+  servers:
+    - 1.1.1.1
+    - 8.8.8.8
+  domains:
+    - home.arpa
 
 # --- SSH ---
 ssh:
+  keys: /root/.ssh/authorized_keys
   pwauth: true # boolean; equivalent to --ssh-pwauth
 
 # --- Custom patches ---
@@ -206,6 +213,7 @@ patch_fn <vendor_data_file> <image_file> <distro> <distro_family>
 ### Notes and Gotchas
 
 - **`--user` requires credentials.** At least one of `--password` or `--ssh-keys` must also be provided when `--user` is set.
+- **Config path values should be absolute paths.** For `ssh.keys` and `script` in YAML config, use absolute filesystem paths. Relative paths and unexpanded forms like `~` may fail validation as "file not found".
 - **Avoid reserved usernames.** Do not use usernames that clash with existing system groups (e.g. `admin`). Cloud-init fails silently when it tries to create a group that already exists. `root` is a safe exception.
 - **`--ssh-pwauth` root behaviour.** `PermitRootLogin yes` is only written when `--user root` is set. For regular users only `PasswordAuthentication yes` is applied.
 - **Disk format support varies by storage type.** Use `raw` for `lvmthin` and `rbd`; `qcow2` requires directory-based storage (`dir`, `nfs`, `cifs`).
@@ -241,11 +249,12 @@ patch_fn <vendor_data_file> <image_file> <distro> <distro_family>
   --password secret \
   --ssh-keys ~/.ssh/authorized_keys \
   --memory 4096 --cores 4 \
-  --bridge vmbr0 --vlan 100 \
+  --disk-scsihw virtio-scsi-single \
+  --net-bridge vmbr0 --net-vlan 100 \
   --disk-storage local --snippets-storage local \
-  --disk-size 32G --disk-format qcow2 \
+  --disk-size 32G --disk-bus scsi --disk-format qcow2 \
   --timezone Europe/Berlin \
-  --keyboard de --keyboard-variant nodeadkeys \
+  --keyboard-layout de --keyboard-variant nodeadkeys \
   --locale de_DE.UTF-8 \
   --dns-servers "1.1.1.1 8.8.8.8" \
   --dns-domains "home.arpa" \
@@ -299,12 +308,12 @@ patch_fn <vendor_data_file> <image_file> <distro> <distro_family>
 
 ## Tested Images
 
-| Distro          | Image URL                                                                                                                         |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Ubuntu 24.04    | https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img                                                     |
-| Debian 12       | https://cdimage.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2                                        |
-| Debian 13       | https://cdimage.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2                                          |
-| Fedora 43       | https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2 |
-| Rocky Linux 9   | https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2                                      |
-| AlmaLinux 9     | https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2                           |
-| CentOS Stream 9 | https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2                           |
+| Distro          | Image URL                                                                                                                           |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Ubuntu 24.04    | <https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img>                                                     |
+| Debian 12       | <https://cdimage.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2>                                        |
+| Debian 13       | <https://cdimage.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2>                                          |
+| Fedora 43       | <https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2> |
+| Rocky Linux 9   | <https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2>                                      |
+| AlmaLinux 9     | <https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2>                           |
+| CentOS Stream 9 | <https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2>                           |

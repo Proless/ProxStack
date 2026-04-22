@@ -6,7 +6,7 @@
 # Repository: https://git.mukhtabar.de/proxmox/proxstack
 # Maintainers: Proless
 
-set -e
+set -euo pipefail
 
 # ==============================================================================
 # GLOBAL VARIABLES & CONFIGURATION
@@ -19,44 +19,35 @@ declare -a SUPPORTED_DISTROS=("debian" "ubuntu" "fedora" "rhel")
 declare -A DISK_STORAGE_CONFIG=()
 declare -A SNIPPETS_STORAGE_CONFIG=()
 
-# VM hardware configuration
-declare -A VM_CONFIG=(
-	[memory]="2048"       # Memory in MB (default: 2048)
-	[cores]="4"           # Number of CPU cores (default: 4)
-	[cpu]="x86-64-v2-AES" # CPU type (default: x86-64-v2-AES)
-	[display]="std"       # Display type (e.g., std, cirrus, vmware, qxl)
+# Keyboard configuration
+declare -A KEYBOARD_CONFIG=(
+	[layout]=""  # Keyboard layout
+	[variant]="" # Keyboard variant
 )
 
 # Disk configuration
 declare -A DISK_CONFIG=(
-	[size]=""             # Disk size for the VM (e.g., 32G)
-	[format]="qcow2"      # Disk format: qcow2 (default), raw, or vmdk
-	[flags]="discard=on"  # Default disk flags
-	[storage]="local-lvm" # The Proxmox storage where the VM disk will be allocated (default: local-lvm)
-)
-
-# Cloud-init configuration
-declare -A CLOUD_INIT_CONFIG=(
-	[user]=""       # Cloud-init user
-	[password]=""   # Cloud-init password
-	["ssh-keys"]="" # Path to file with public SSH keys
-)
-
-# Localization configuration
-declare -A LOCALIZATION_CONFIG=(
-	[timezone]=""           # Timezone
-	[keyboard]=""           # Keyboard layout
-	["keyboard-variant"]="" # Keyboard variant
-	[locale]=""             # Locale
+	[size]=""                     # Disk size for the VM (e.g., 32G)
+	[bus]="scsi"                  # Disk bus/controller type: scsi (default), virtio, sata, ide
+	[format]="qcow2"              # Disk format: qcow2 (default), raw, or vmdk
+	[flags]="discard=on"          # Default disk flags
+	[scsihw]="virtio-scsi-single" # SCSI controller model (default: virtio-scsi-single)
+	[storage]="local-lvm"         # The Proxmox storage where the VM disk will be allocated (default: local-lvm)
 )
 
 # Network configuration
-declare -A NETWORK_CONFIG=(
+declare -A NET_CONFIG=(
 	[bridge]="vmbr0" # The Proxmox network bridge for the VM (default: vmbr0)
 	[vlan]=""        # Optional VLAN tag for net0 (1-4094)
 )
 
-# Network DNS configuration
+# SSH configuration
+declare -A SSH_CONFIG=(
+	[keys]=""    # Path to file with public SSH keys
+	[pwauth]="0" # Enable SSH password authentication
+)
+
+# DNS configuration
 declare -A DNS_CONFIG=(
 	[servers]="" # DNS servers
 	[domains]="" # Domain search domains
@@ -69,222 +60,31 @@ declare -A SNIPPETS_CONFIG=(
 
 declare -a MERGED_ARGS=() # Final merged arguments built from config defaults + CLI overrides
 
-# Template identification
-ID=""            # ID for the template
-URL=""           # Cloud Image URL
-NAME=""          # Name for the template
-DISTRO=""        # Raw distro detected from the image
-IMAGE_FILE=""    # Local path to the downloaded image file
-DISTRO_FAMILY="" # Normalized distro family used for feature selection
+# Settings
+ID=""               # ID for the template
+URL=""              # Cloud Image URL
+NAME=""             # Name for the template
+DISTRO=""           # Raw distro detected from the image
+IMAGE_FILE=""       # Local path to the downloaded image file
+DISTRO_FAMILY=""    # Normalized distro family used for feature selection
+USER=""             # Cloud-init user
+PASSWORD=""         # Cloud-init password
+UPGRADE="0"         # Cloud-init package upgrade behavior: 1=enable, 0=disable
+MEMORY="2048"       # Memory in MB
+CORES="4"           # Number of CPU cores
+CPU="x86-64-v2-AES" # CPU type
+DISPLAY="std"       # Display type
+TIMEZONE=""         # Timezone
+LOCALE=""           # Locale
 
 # Advanced options
-PACKAGES_TO_INSTALL=""          # Space-separated list of packages to install inside the VM template
-PATCHES_TO_APPLY=""             # Space-separated list of patches to apply
-SCRIPT_FILE=""                  # Local script file to write via cloud-init and run as final runcmd step
-REBOOT_AFTER_CLOUD_INIT="false" # Reboot VM after cloud-init completes
+PACKAGES=""    # Space-separated list of packages to install inside the VM template
+PATCHES=""     # Space-separated list of patches to apply
+SCRIPT=""      # Local script file to write via cloud-init and run as final runcmd step
+REBOOT="false" # Reboot VM after cloud-init completes
 
 # Metadata
-VERSION="1.0.0"
-
-# ==============================================================================
-# UTILITY
-# ==============================================================================
-
-quiet_run() {
-	"$@" >/dev/null 2>&1 || {
-		echo "Command failed: $*" >&2
-		exit 1
-	}
-}
-
-die() {
-	echo "Error: $*" >&2
-	exit 1
-}
-
-usage() {
-	echo "Usage: $0 --url <url> --id <id> --name <name> [OPTIONS]"
-	echo "       $0 --config <file|name> [OPTIONS]"
-	echo ""
-	echo "Creates a Proxmox VE template for a given Linux cloud image."
-	echo ""
-	echo "Required options:"
-	echo "  --url <url>                    URL to the cloud image to use for the template"
-	echo "  --id <id>                      ID for the template"
-	echo "  --name <name>                  Name for the template"
-	echo ""
-	echo "Options:"
-	echo "  --user <user>                  Set the cloud-init user"
-	echo "  --password <password>          Set the cloud-init password"
-	echo "  --bridge <bridge>              Network bridge for VM (default: vmbr0)"
-	echo "  --vlan <id>                    VLAN tag for VM network interface (1-4094)"
-	echo "  --memory <mb>                  Memory in MB (default: 2048)"
-	echo "  --cores <num>                  Number of CPU cores (default: 4)"
-	echo "  --cpu <type>                   CPU type for VM (default: x86-64-v2-AES)"
-	echo "  --timezone <timezone>          Timezone (e.g., America/New_York, Europe/London)"
-	echo "  --keyboard <layout>            Keyboard layout (e.g., us, uk, de)"
-	echo "  --keyboard-variant <variant>   Keyboard variant (e.g., intl)"
-	echo "  --locale <locale>              Locale (e.g., en_US.UTF-8, de_DE.UTF-8)"
-	echo "  --ssh-keys <file>              Path to file with public SSH keys (one per line, OpenSSH format)"
-	echo "  --ssh-pwauth                   Enable SSH password authentication; if --user root, also allow root password login"
-	echo "  --disk-size <size>             Disk size (e.g., 32G, 50G, 6144M)"
-	echo "  --disk-storage <storage>       Proxmox storage for VM disk (default: local-lvm)"
-	echo "  --disk-format <format>         Disk format: ex. qcow2 (default)"
-	echo "  --disk-flags <flags>           Space-separated Disk flags (default: discard=on)"
-	echo "  --display <type>               Set the display/vga type (default: std)"
-	echo "  --packages <packages>          Space-separated list of packages to install in the template using cloud-init"
-	echo "  --dns-servers <servers>        Space-separated DNS servers (e.g., '10.10.10.10 9.9.9.9')"
-	echo "  --dns-domains <domains>       Space-separated domain names (e.g., 'example.com internal.local')"
-	echo "  --snippets-storage <storage>   Proxmox storage for cloud-init snippets (default: same as --disk-storage)"
-	echo "  --patches <patches>            Space-separated list of patch names to apply"
-	echo "  --script <file>                Local shell script to run as the last cloud-init runcmd step"
-	echo "  --reboot                       Reboot the VM after cloud-init has completed"
-	echo "  --config <file|name>           YAML config file path, or a template name resolved from templates/<name>.{yaml,yml}; CLI flags override config values"
-	echo "  -h,  --help                    Display this help message"
-	echo "  -V,  --version                 Display script version"
-
-	echo ""
-	echo "Supported distro families: ${SUPPORTED_DISTROS[*]}"
-	echo "RHEL-compatible images such as Rocky, CentOS, AlmaLinux, and RHEL are normalized to rhel"
-}
-
-print_version() {
-	echo "$(basename "$0") ${VERSION}"
-}
-
-load_patches() {
-	local script_dir
-	local patch_dir
-	local patch_file
-
-	script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-	patch_dir="${script_dir}/patches"
-
-	if [[ ! -d "${patch_dir}" ]]; then
-		die "Patch directory not found: ${patch_dir}"
-	fi
-
-	shopt -s nullglob
-	for patch_file in "${patch_dir}"/*.sh; do
-		# shellcheck disable=SC1090
-		source "${patch_file}"
-	done
-	shopt -u nullglob
-}
-
-build_args_from_config() {
-	local config_file="${1}"
-	local -n _out_args="${2}"
-	local val
-
-	# Helper: read a yq path and append a CLI flag+value if the key is present.
-	_cfg_flag() {
-		local yq_path="${1}" flag="${2}"
-		val="$(yq -r "${yq_path} // empty" "${config_file}")"
-		[[ -n "${val}" ]] && _out_args+=("${flag}" "${val}")
-	}
-
-	# Helper: read a yq path and append a boolean CLI flag if the key is true.
-	_cfg_bool() {
-		local yq_path="${1}" flag="${2}"
-		val="$(yq -r "${yq_path} // empty" "${config_file}")"
-		[[ "${val}" == "true" ]] && _out_args+=("${flag}")
-	}
-
-	# Helper: read a yq path as a YAML list and append a space-joined CLI flag+value.
-	_cfg_list_flag() {
-		local yq_path="${1}" flag="${2}" key_name="${3}" node_type
-		node_type="$(yq -r "${yq_path} | type" "${config_file}")"
-
-		if [[ "${node_type}" == "!!seq" ]]; then
-			val="$(yq -r "${yq_path} | join(\" \")" "${config_file}")"
-			[[ -n "${val}" ]] && _out_args+=("${flag}" "${val}")
-		elif [[ "${node_type}" != "!!null" ]]; then
-			die "Invalid config key '${key_name}': expected a YAML list"
-		fi
-	}
-
-	# Required options:
-	_cfg_flag '.url' "--url"
-	_cfg_flag '.id' "--id"
-	_cfg_flag '.name' "--name"
-
-	# vm:
-	_cfg_flag '.vm.memory' "--memory"
-	_cfg_flag '.vm.cores' "--cores"
-	_cfg_flag '.vm.cpu' "--cpu"
-	_cfg_flag '.vm.display' "--display"
-
-	# disk:
-	_cfg_flag '.disk.storage' "--disk-storage"
-	_cfg_flag '.disk.size' "--disk-size"
-	_cfg_flag '.disk.format' "--disk-format"
-	_cfg_list_flag '.disk.flags' "--disk-flags" "disk.flags"
-
-	# snippets:
-	_cfg_flag '.snippets.storage' "--snippets-storage"
-
-	# cloud-init:
-	_cfg_flag '.["cloud-init"].user' "--user"
-	_cfg_flag '.["cloud-init"].password' "--password"
-	_cfg_flag '.["cloud-init"]["ssh-keys"]' "--ssh-keys"
-	_cfg_flag '.["cloud-init"].script' "--script"
-	_cfg_bool '.["cloud-init"].reboot' "--reboot"
-
-	# packages:
-	_cfg_list_flag '.packages' "--packages" "packages"
-
-	# localization:
-	_cfg_flag '.localization.timezone' "--timezone"
-	_cfg_flag '.localization.keyboard' "--keyboard"
-	_cfg_flag '.localization["keyboard-variant"]' "--keyboard-variant"
-	_cfg_flag '.localization.locale' "--locale"
-
-	# network:
-	_cfg_flag '.network.bridge' "--bridge"
-	_cfg_flag '.network.vlan' "--vlan"
-	_cfg_list_flag '.network.dns.servers' "--dns-servers" "network.dns.servers"
-	_cfg_list_flag '.network.dns.domains' "--dns-domains" "network.dns.domains"
-
-	# ssh:
-	_cfg_bool '.ssh.pwauth' "--ssh-pwauth"
-
-	# Top-level misc:
-	_cfg_list_flag '.patches' "--patches" "patches"
-}
-
-normalize_distro() {
-	case "${1}" in
-	debian | ubuntu | fedora)
-		echo "${1}"
-		;;
-	rocky | centos | almalinux | rhel | redhat | redhat-based)
-		echo "rhel"
-		;;
-	*)
-		return 1
-		;;
-	esac
-}
-
-apply_patches() {
-	local vendor_data_file="${1}"
-	local image_file="${2}"
-	local patches="${PATCHES_TO_APPLY}"
-
-	# Built-in patches decide distro-specific behavior internally.
-	patches+=" ssh keyboard locale"
-
-	IFS=' ' read -ra patches_array <<<"${patches}"
-	for patch in "${patches_array[@]}"; do
-		if declare -f "${patch}" >/dev/null; then
-			echo "Applying patch ${patch}..."
-			"${patch}" "${vendor_data_file}" "${image_file}" "${DISTRO}" "${DISTRO_FAMILY}"
-		else
-			echo "Warning: Unknown patch '${patch}' specified. Skipping."
-		fi
-	done
-}
+VERBOSE_MODE="false"
 
 # ==============================================================================
 # CLOUD-INIT VENDOR DATA
@@ -322,8 +122,8 @@ ci_add_extra_packages() {
 	local vendor_data_file="${1}"
 
 	# Append extra packages if specified
-	if [[ -n "${PACKAGES_TO_INSTALL}" ]]; then
-		IFS=' ' read -ra pkg_array <<<"${PACKAGES_TO_INSTALL}"
+	if [[ -n "${PACKAGES}" ]]; then
+		IFS=' ' read -ra pkg_array <<<"${PACKAGES}"
 		for pkg in "${pkg_array[@]}"; do
 			yq -i -y ".packages += [\"${pkg}\"]" "${vendor_data_file}"
 		done
@@ -334,27 +134,27 @@ ci_add_localization() {
 	local vendor_data_file="${1}"
 
 	# Add locale configuration
-	[[ -n "${LOCALIZATION_CONFIG[locale]}" ]] && yq -i -y ".locale = \"${LOCALIZATION_CONFIG[locale]}\"" "${vendor_data_file}"
+	[[ -n "${LOCALE}" ]] && yq -i -y ".locale = \"${LOCALE}\"" "${vendor_data_file}"
 
 	# Add timezone configuration
-	[[ -n "${LOCALIZATION_CONFIG[timezone]}" ]] && yq -i -y ".timezone = \"${LOCALIZATION_CONFIG[timezone]}\"" "${vendor_data_file}"
+	[[ -n "${TIMEZONE}" ]] && yq -i -y ".timezone = \"${TIMEZONE}\"" "${vendor_data_file}"
 
 	# Add keyboard configuration
-	if [[ -n "${LOCALIZATION_CONFIG[keyboard]}" ]]; then
-		yq -i -y ".keyboard.layout = \"${LOCALIZATION_CONFIG[keyboard]}\"" "${vendor_data_file}"
-		[[ -n "${LOCALIZATION_CONFIG["keyboard-variant"]}" ]] && yq -i -y ".keyboard.variant = \"${LOCALIZATION_CONFIG["keyboard-variant"]}\"" "${vendor_data_file}"
+	if [[ -n "${KEYBOARD_CONFIG[layout]}" ]]; then
+		yq -i -y ".keyboard.layout = \"${KEYBOARD_CONFIG[layout]}\"" "${vendor_data_file}"
+		[[ -n "${KEYBOARD_CONFIG[variant]}" ]] && yq -i -y ".keyboard.variant = \"${KEYBOARD_CONFIG[variant]}\"" "${vendor_data_file}"
 	fi
 }
 
 ci_add_script() {
 	local vendor_data_file="${1}"
 
-	[[ -z "${SCRIPT_FILE}" ]] && return 0
+	[[ -z "${SCRIPT}" ]] && return 0
 
 	local script_path="/usr/local/sbin/ci_script.sh"
 	local script_b64
 
-	script_b64=$(base64 -w 0 "${SCRIPT_FILE}")
+	script_b64=$(base64 -w 0 "${SCRIPT}")
 
 	SCRIPT_B64="${script_b64}" yq -i -y '.write_files += [{"path":"/usr/local/sbin/ci_script.sh","owner":"root:root","permissions":"0755","encoding":"b64","content": env.SCRIPT_B64}]' "${vendor_data_file}"
 	yq -i -y ".runcmd += [\"${script_path}\"]" "${vendor_data_file}"
@@ -363,7 +163,7 @@ ci_add_script() {
 ci_add_reboot() {
 	local vendor_data_file="${1}"
 
-	[[ "${REBOOT_AFTER_CLOUD_INIT}" != "true" ]] && return 0
+	[[ "${REBOOT}" != "true" ]] && return 0
 
 	yq -i -y '.power_state = {"mode":"reboot","message":"Rebooting after cloud-init completion","timeout":30,"condition":true}' "${vendor_data_file}"
 }
@@ -396,19 +196,19 @@ prepare_disk() {
 
 create_vm() {
 	local image_file="${1}"
-	local net0_config="virtio,macaddr=00:00:00:00:00:00,bridge=${NETWORK_CONFIG[bridge]}"
+	local net0_config="virtio,macaddr=00:00:00:00:00:00,bridge=${NET_CONFIG[bridge]}"
 
-	[[ -n "${NETWORK_CONFIG[vlan]}" ]] && net0_config+=",tag=${NETWORK_CONFIG[vlan]}"
+	[[ -n "${NET_CONFIG[vlan]}" ]] && net0_config+=",tag=${NET_CONFIG[vlan]}"
 
 	echo "Creating VM ${ID}..."
 	quiet_run qm create "${ID}" --name "${NAME}" \
-		--memory "${VM_CONFIG[memory]}" \
-		--cpu "${VM_CONFIG[cpu]}" \
-		--cores "${VM_CONFIG[cores]}" \
+		--memory "${MEMORY}" \
+		--cpu "${CPU}" \
+		--cores "${CORES}" \
 		--net0 "${net0_config}" \
 		--agent enabled=1 \
 		--ostype l26 \
-		--vga "${VM_CONFIG[display]}" \
+		--vga "${DISPLAY}" \
 		--serial0 socket
 
 	echo "Importing disk..."
@@ -429,15 +229,40 @@ configure_vm() {
 	fi
 
 	# Build qm set command with conditional cloud-init parameters
+	local disk_device
+	local cloudinit_device="ide0"
+
+	case "${DISK_CONFIG[bus]}" in
+	scsi)
+		disk_device="scsi0"
+		;;
+	virtio)
+		disk_device="virtio0"
+		;;
+	sata)
+		disk_device="sata0"
+		;;
+	ide)
+		disk_device="ide0"
+		cloudinit_device="ide2"
+		;;
+	*)
+		die "Unsupported disk bus '${DISK_CONFIG[bus]}'. Supported values: scsi, virtio, sata, ide"
+		;;
+	esac
+
 	local qm_cmd=(qm set "${ID}"
-		--scsihw "virtio-scsi-single"
-		--scsi0 "${disk_path},${DISK_CONFIG[flags]// /,}"
-		--ide0 "${DISK_STORAGE_CONFIG[name]}:cloudinit"
-		--boot "order=scsi0"
-		--ciupgrade 1
+		--ciupgrade "${UPGRADE}"
 		--cicustom "vendor=${SNIPPETS_STORAGE_CONFIG[name]}:snippets/ci-vendor-data-${ID}.yml"
 		--ipconfig0 "ip=dhcp"
 	)
+
+	# scsihw only applies to scsi bus.
+	[[ "${DISK_CONFIG[bus]}" == "scsi" ]] && qm_cmd+=(--scsihw "${DISK_CONFIG[scsihw]}")
+
+	qm_cmd+=("--${disk_device}" "${disk_path},${DISK_CONFIG[flags]// /,}")
+	qm_cmd+=("--${cloudinit_device}" "${DISK_STORAGE_CONFIG[name]}:cloudinit")
+	qm_cmd+=(--boot "order=${disk_device}")
 
 	# Add DNS servers if specified
 	[[ -n "${DNS_CONFIG[servers]}" ]] && qm_cmd+=(--nameserver "${DNS_CONFIG[servers]}")
@@ -446,10 +271,10 @@ configure_vm() {
 	[[ -n "${DNS_CONFIG[domains]}" ]] && qm_cmd+=(--searchdomain "${DNS_CONFIG[domains]}")
 
 	# Add cloud-init user settings if user is specified
-	if [[ -n "${CLOUD_INIT_CONFIG[user]}" ]]; then
-		qm_cmd+=(--ciuser "${CLOUD_INIT_CONFIG[user]}")
-		[[ -n "${CLOUD_INIT_CONFIG[password]}" ]] && qm_cmd+=(--cipassword "${CLOUD_INIT_CONFIG[password]}")
-		[[ -n "${CLOUD_INIT_CONFIG["ssh-keys"]}" ]] && qm_cmd+=(--sshkeys "${CLOUD_INIT_CONFIG["ssh-keys"]}")
+	if [[ -n "${USER}" ]]; then
+		qm_cmd+=(--ciuser "${USER}")
+		[[ -n "${PASSWORD}" ]] && qm_cmd+=(--cipassword "${PASSWORD}")
+		[[ -n "${SSH_CONFIG[keys]}" ]] && qm_cmd+=(--sshkeys "${SSH_CONFIG[keys]}")
 	fi
 
 	quiet_run "${qm_cmd[@]}"
@@ -527,6 +352,17 @@ require_arg_vlan() {
 	if ! [[ "${1}" =~ ^[0-9]+$ ]] || [[ "${1}" -lt 1 ]] || [[ "${1}" -gt 4094 ]]; then
 		die "Argument '${2}' must be a VLAN ID between 1 and 4094 (got '${1}')"
 	fi
+}
+
+require_arg_disk_bus() {
+	case "${1}" in
+	scsi | virtio | sata | ide)
+		return 0
+		;;
+	*)
+		die "Argument '${2}' must be one of: scsi, virtio, sata, ide (got '${1}')"
+		;;
+	esac
 }
 
 parse_storage_config() {
@@ -661,35 +497,47 @@ parse_arguments() {
 			shift 2
 			;;
 		--user)
-			CLOUD_INIT_CONFIG[user]="${2}"
+			USER="${2}"
 			shift 2
 			;;
 		--password)
-			CLOUD_INIT_CONFIG[password]="${2}"
+			PASSWORD="${2}"
 			shift 2
 			;;
+		--upgrade)
+			UPGRADE="1"
+			shift
+			;;
 		--memory)
-			VM_CONFIG[memory]="${2}"
+			MEMORY="${2}"
 			shift 2
 			;;
 		--cores)
-			VM_CONFIG[cores]="${2}"
+			CORES="${2}"
 			shift 2
 			;;
 		--cpu)
-			VM_CONFIG[cpu]="${2}"
+			CPU="${2}"
 			shift 2
 			;;
-		--bridge)
-			NETWORK_CONFIG[bridge]="${2}"
+		--disk-scsihw)
+			DISK_CONFIG[scsihw]="${2}"
 			shift 2
 			;;
-		--vlan)
-			NETWORK_CONFIG[vlan]="${2}"
+		--net-bridge)
+			NET_CONFIG[bridge]="${2}"
+			shift 2
+			;;
+		--net-vlan)
+			NET_CONFIG[vlan]="${2}"
 			shift 2
 			;;
 		--disk-size)
 			DISK_CONFIG[size]="${2}"
+			shift 2
+			;;
+		--disk-bus)
+			DISK_CONFIG[bus]="${2}"
 			shift 2
 			;;
 		--disk-storage)
@@ -706,31 +554,32 @@ parse_arguments() {
 			shift 2
 			;;
 		--display)
-			VM_CONFIG[display]="${2}"
+			DISPLAY="${2}"
 			shift 2
 			;;
 		--timezone)
-			LOCALIZATION_CONFIG[timezone]="${2}"
+			TIMEZONE="${2}"
 			shift 2
 			;;
-		--keyboard)
-			LOCALIZATION_CONFIG[keyboard]="${2}"
+		--keyboard-layout)
+			KEYBOARD_CONFIG[layout]="${2}"
 			shift 2
 			;;
 		--keyboard-variant)
-			LOCALIZATION_CONFIG["keyboard-variant"]="${2}"
+			KEYBOARD_CONFIG[variant]="${2}"
 			shift 2
 			;;
 		--locale)
-			LOCALIZATION_CONFIG[locale]="${2}"
+			LOCALE="${2}"
 			shift 2
 			;;
 		--ssh-keys)
-			CLOUD_INIT_CONFIG["ssh-keys"]="${2}"
+			SSH_CONFIG[keys]="${2}"
 			shift 2
 			;;
 		--ssh-pwauth)
-			PATCHES_TO_APPLY+=" ssh_pwauth"
+			SSH_CONFIG[pwauth]="1"
+			PATCHES+=" ssh_pwauth"
 			shift
 			;;
 		--dns-servers)
@@ -746,27 +595,27 @@ parse_arguments() {
 			shift 2
 			;;
 		--packages)
-			PACKAGES_TO_INSTALL="${2}"
+			PACKAGES="${2}"
 			shift 2
 			;;
 		--patches)
-			PATCHES_TO_APPLY="${2}"
+			PATCHES="${2}"
 			shift 2
 			;;
 		--script)
-			SCRIPT_FILE="${2}"
+			SCRIPT="${2}"
 			shift 2
 			;;
 		--reboot)
-			REBOOT_AFTER_CLOUD_INIT="true"
+			REBOOT="true"
+			shift
+			;;
+		-v | --verbose)
+			VERBOSE_MODE="true"
 			shift
 			;;
 		-h | --help)
 			usage
-			exit 0
-			;;
-		-V | --version)
-			print_version
 			exit 0
 			;;
 		*)
@@ -799,26 +648,28 @@ validate_args() {
 
 	require_arg_string "${DISK_CONFIG[storage]}" "disk storage (--disk-storage)"
 	require_arg_string "${DISK_CONFIG[format]}" "disk format (--disk-format)"
-	require_arg_string "${NETWORK_CONFIG[bridge]}" "network bridge (--bridge)"
+	require_arg_string "${NET_CONFIG[bridge]}" "network bridge (--net-bridge)"
 
-	require_arg_number "${VM_CONFIG[memory]}" "memory (--memory)"
-	require_arg_number "${VM_CONFIG[cores]}" "cores (--cores)"
+	require_arg_number "${MEMORY}" "memory (--memory)"
+	require_arg_number "${CORES}" "cores (--cores)"
 
 	# Validate optional parameters
-	if [[ -n "${CLOUD_INIT_CONFIG[user]}" ]]; then
-		if [[ -z "${CLOUD_INIT_CONFIG[password]}" && -z "${CLOUD_INIT_CONFIG["ssh-keys"]}" ]]; then
+	if [[ -n "${USER}" ]]; then
+		if [[ -z "${PASSWORD}" && -z "${SSH_CONFIG[keys]}" ]]; then
 			die "You must provide at least one of --password or --ssh-keys when --user is specified"
 		fi
 
 		# If SSH keys provided, check file existence
-		[[ -n "${CLOUD_INIT_CONFIG["ssh-keys"]}" ]] && require_arg_file "${CLOUD_INIT_CONFIG["ssh-keys"]}" "ssh keys (--ssh-keys)"
+		[[ -n "${SSH_CONFIG[keys]}" ]] && require_arg_file "${SSH_CONFIG[keys]}" "ssh keys (--ssh-keys)"
 	else
 		echo "Warning: No cloud-init user provided"
 	fi
 
-	[[ -n "${SCRIPT_FILE}" ]] && require_arg_file "${SCRIPT_FILE}" "script (--script)"
+	[[ -n "${SCRIPT}" ]] && require_arg_file "${SCRIPT}" "script (--script)"
 
-	[[ -n "${NETWORK_CONFIG[vlan]}" ]] && require_arg_vlan "${NETWORK_CONFIG[vlan]}" "vlan (--vlan)"
+	[[ -n "${NET_CONFIG[vlan]}" ]] && require_arg_vlan "${NET_CONFIG[vlan]}" "vlan (--net-vlan)"
+
+	[[ -n "${DISK_CONFIG[bus]}" ]] && require_arg_disk_bus "${DISK_CONFIG[bus]}" "disk bus (--disk-bus)"
 }
 
 validate_storage() {
@@ -864,6 +715,280 @@ validate_distro() {
 # MAIN
 # ==============================================================================
 
+# ==============================================================================
+# UTILITY
+# ==============================================================================
+
+quiet_run() {
+	if [[ "$VERBOSE_MODE" == "true" ]]; then
+		"$@"
+	else
+		"$@" >/dev/null 2>&1 || die "Command failed: $*"
+	fi
+}
+
+quiet_run_ext() {
+	local cmd="$*"
+	local fname="__tmp_wrap_${$}_${RANDOM}"
+
+	# Create a dynamic wrapper function that contains the entire command
+	eval "
+	$fname() {
+		set -e
+		$cmd
+	}
+	"
+
+	# Run through quiet_run so quiet/verbose works
+	quiet_run "$fname"
+
+	# Clean up
+	unset -f "$fname"
+}
+
+die() {
+	echo "Error: $*" >&2
+	exit 1
+}
+
+usage() {
+	echo "Usage: $0 --url <url> --id <id> --name <name> [OPTIONS]"
+	echo "       $0 --config <file|name> [OPTIONS]"
+	echo ""
+	echo "Creates a Proxmox VE template for a given Linux cloud image."
+	echo ""
+	echo "Required options:"
+	echo "  --url <url>                    URL to the cloud image to use for the template"
+	echo "  --id <id>                      ID for the template"
+	echo "  --name <name>                  Name for the template"
+	echo ""
+	echo "Options:"
+	echo "  --user <user>                  Set the cloud-init user"
+	echo "  --password <password>          Set the cloud-init password"
+	echo "  --upgrade                      Enable cloud-init package upgrade (default: disabled)"
+	echo "  --net-bridge <bridge>          Network bridge for VM (default: vmbr0)"
+	echo "  --net-vlan <id>                VLAN tag for VM network interface (1-4094)"
+	echo "  --memory <mb>                  Memory in MB (default: 2048)"
+	echo "  --cores <num>                  Number of CPU cores (default: 4)"
+	echo "  --cpu <type>                   CPU type for VM (default: x86-64-v2-AES)"
+	echo "  --disk-scsihw <type>           SCSI controller model for scsi bus (default: virtio-scsi-single)"
+	echo "  --timezone <timezone>          Timezone (e.g., America/New_York, Europe/London)"
+	echo "  --keyboard-layout <layout>     Keyboard layout (e.g., us, uk, de)"
+	echo "  --keyboard-variant <variant>   Keyboard variant (e.g., intl)"
+	echo "  --locale <locale>              Locale (e.g., en_US.UTF-8, de_DE.UTF-8)"
+	echo "  --ssh-keys <file>              Path to file with public SSH keys (one per line, OpenSSH format)"
+	echo "  --ssh-pwauth                   Enable SSH password authentication; if --user root, also allow root password login"
+	echo "  --disk-size <size>             Disk size (e.g., 32G, 50G, 6144M)"
+	echo "  --disk-bus <type>              Disk bus/controller type: scsi (default), virtio, sata, ide"
+	echo "  --disk-storage <storage>       Proxmox storage for VM disk (default: local-lvm)"
+	echo "  --disk-format <format>         Disk format: ex. qcow2 (default)"
+	echo "  --disk-flags <flags>           Space-separated Disk flags (default: discard=on)"
+	echo "  --display <type>               Set the display/vga type (default: std)"
+	echo "  --packages <packages>          Space-separated list of packages to install in the template using cloud-init"
+	echo "  --dns-servers <servers>        Space-separated DNS servers (e.g., '10.10.10.10 9.9.9.9')"
+	echo "  --dns-domains <domains>        Space-separated domain names (e.g., 'example.com internal.local')"
+	echo "  --snippets-storage <storage>   Proxmox storage for cloud-init snippets (default: same as --disk-storage)"
+	echo "  --patches <patches>            Space-separated list of patch names to apply"
+	echo "  --script <file>                Local shell script to run as the last cloud-init runcmd step"
+	echo "  --reboot                       Reboot the VM after cloud-init has completed"
+	echo "  --config <file|name>           YAML config file path, or a template name resolved from templates/<name>.{yaml,yml}; CLI flags override config values"
+	echo "  -v,  --verbose                 Enable verbose mode"
+	echo "  -h,  --help                    Display this help message"
+
+	echo ""
+	echo "Supported distro families: ${SUPPORTED_DISTROS[*]}"
+	echo "RHEL-compatible images such as Rocky, CentOS, AlmaLinux, and RHEL are normalized to rhel"
+}
+
+load_patches() {
+	local script_dir
+	local patch_dir
+	local patch_file
+
+	script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+	patch_dir="${script_dir}/patches"
+
+	if [[ ! -d "${patch_dir}" ]]; then
+		die "Patch directory not found: ${patch_dir}"
+	fi
+
+	shopt -s nullglob
+	for patch_file in "${patch_dir}"/*.sh; do
+		# shellcheck disable=SC1090
+		source "${patch_file}"
+	done
+	shopt -u nullglob
+}
+
+build_args_from_config() {
+	local config_file="${1}"
+	local -n _out_args="${2}"
+
+	# Helper: read a yq path and append CLI argument based on type (string, bool, or list)
+	_cfg_read() {
+		local yq_path="${1}" flag="${2}" type="${3}" output exit_code read_type read_value
+		echo "Reading config key '${yq_path}' for flag '${flag}'..."
+
+		# Helper to safely execute yq and capture exit code
+		_safe_yq() {
+			local yq_expr="${1}"
+			set +e
+			output=$(yq -r "${yq_expr}" "${config_file}" 2>&1)
+			exit_code=$?
+			set -e
+		}
+
+		# Read key once: emit either __MISSING__ or "<type>\t<value>".
+		# For arrays, value is space-joined to match CLI list argument format.
+		_safe_yq "if (${yq_path} | type) == \"null\" then \"__MISSING__\" else ((${yq_path} | type) + \"\\t\" + (if (${yq_path} | type) == \"array\" then (${yq_path} | join(\" \") ) elif (${yq_path} | type) == \"boolean\" then (if ${yq_path} then \"true\" else \"false\" end) else (${yq_path} | tostring) end)) end"
+		if [[ ${exit_code} -ne 0 ]]; then
+			die "Failed to parse config at '${yq_path}': $output"
+		fi
+
+		if [[ "${output}" == "__MISSING__" ]]; then
+			echo "  Key '${yq_path}' not found, skipping"
+			return 0
+		fi
+
+		# Split "type<TAB>value".
+		read_type="${output%%$'\t'*}"
+		if [[ "${output}" == *$'\t'* ]]; then
+			read_value="${output#*$'\t'}"
+		else
+			read_value=""
+		fi
+
+		# Skip if value is empty.
+		if [[ -z "${read_value}" ]]; then
+			echo "  Key '${yq_path}' has empty value, skipping"
+			return 0
+		fi
+
+		case "${type}" in
+		string)
+			if [[ "${read_type}" != "string" ]]; then
+				die "Invalid config key '${yq_path}': expected string but got '${read_type}'"
+			fi
+			echo "  Setting ${flag}=${read_value}"
+			_out_args+=("${flag}" "${read_value}")
+			;;
+		number)
+			if [[ "${read_type}" != "number" ]]; then
+				die "Invalid config key '${yq_path}': expected number but got '${read_type}'"
+			fi
+			echo "  Setting ${flag}=${read_value}"
+			_out_args+=("${flag}" "${read_value}")
+			;;
+		bool)
+			if [[ "${read_type}" != "boolean" ]]; then
+				die "Invalid config key '${yq_path}': expected boolean (true/false) but got '${read_type}'"
+			fi
+			if [[ "${read_value}" == "true" ]]; then
+				echo "  Setting ${flag}"
+				_out_args+=("${flag}")
+			elif [[ "${read_value}" == "false" ]]; then
+				echo "  Key '${yq_path}' is false, skipping"
+			else
+				die "Invalid config key '${yq_path}': expected boolean value true/false but got '${read_value}'"
+			fi
+			;;
+		list)
+			if [[ "${read_type}" != "array" ]]; then
+				die "Invalid config key '${yq_path}': expected YAML list (array) but got '${read_type}'"
+			fi
+			echo "  Setting ${flag}=${read_value}"
+			_out_args+=("${flag}" "${read_value}")
+			;;
+		esac
+	}
+
+	# Required options:
+	_cfg_read '.url' "--url" string
+	_cfg_read '.id' "--id" number
+	_cfg_read '.name' "--name" string
+
+	# top-level VM hardware:
+	_cfg_read '.memory' "--memory" number
+	_cfg_read '.cores' "--cores" number
+	_cfg_read '.cpu' "--cpu" string
+	_cfg_read '.display' "--display" string
+
+	# disk:
+	_cfg_read '.disk.storage' "--disk-storage" string
+	_cfg_read '.disk.size' "--disk-size" string
+	_cfg_read '.disk.bus' "--disk-bus" string
+	_cfg_read '.disk.format' "--disk-format" string
+	_cfg_read '.disk.scsihw' "--disk-scsihw" string
+	_cfg_read '.disk.flags' "--disk-flags" list
+
+	# snippets:
+	_cfg_read '.snippets.storage' "--snippets-storage" string
+
+	# cloud-init:
+	_cfg_read '.user' "--user" string
+	_cfg_read '.password' "--password" string
+	_cfg_read '.upgrade' "--upgrade" bool
+	_cfg_read '.script' "--script" string
+	_cfg_read '.reboot' "--reboot" bool
+
+	# packages:
+	_cfg_read '.packages' "--packages" list
+
+	# localization-related keys:
+	_cfg_read '.timezone' "--timezone" string
+	_cfg_read '.keyboard.layout' "--keyboard-layout" string
+	_cfg_read '.keyboard.variant' "--keyboard-variant" string
+	_cfg_read '.locale' "--locale" string
+
+	# network:
+	_cfg_read '.net.bridge' "--net-bridge" string
+	_cfg_read '.net.vlan' "--net-vlan" number
+
+	# dns:
+	_cfg_read '.dns.servers' "--dns-servers" list
+	_cfg_read '.dns.domains' "--dns-domains" list
+
+	# ssh:
+	_cfg_read '.ssh.pwauth' "--ssh-pwauth" bool
+	_cfg_read '.ssh.keys' "--ssh-keys" string
+
+	# Top-level misc:
+	_cfg_read '.patches' "--patches" list
+}
+
+normalize_distro() {
+	case "${1}" in
+	debian | ubuntu | fedora)
+		echo "${1}"
+		;;
+	rocky | centos | almalinux | rhel | redhat | redhat-based)
+		echo "rhel"
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+apply_patches() {
+	local vendor_data_file="${1}"
+	local image_file="${2}"
+	local _patches="${PATCHES}"
+
+	# Built-in patches decide distro-specific behavior internally.
+	_patches+=" ssh keyboard locale"
+
+	IFS=' ' read -ra patches_array <<<"${_patches}"
+	for patch in "${patches_array[@]}"; do
+		if declare -f "${patch}" >/dev/null; then
+			echo "Applying patch ${patch}..."
+			"${patch}" "${vendor_data_file}" "${image_file}" "${DISTRO}" "${DISTRO_FAMILY}"
+		else
+			echo "Warning: Unknown patch '${patch}' specified. Skipping."
+		fi
+	done
+}
+
 download_image() {
 	local image_dir image_file
 
@@ -876,7 +1001,7 @@ download_image() {
 	# Download if not already present
 	if [[ ! -f "${image_file}" ]]; then
 		echo "Downloading image from ${URL}..."
-		wget -q --show-progress -O "${image_file}" "${URL}"
+		quiet_run wget -q --show-progress -O "${image_file}" "${URL}"
 	fi
 
 	# Set the full path to the image file
@@ -948,7 +1073,7 @@ resolve_merged_args() {
 		fi
 
 		local -a config_args=()
-		build_args_from_config "${config_file}" config_args
+		quiet_run build_args_from_config "${config_file}" config_args
 
 		# Merge config defaults first, then CLI overrides.
 		MERGED_ARGS=("${config_args[@]+"${config_args[@]}"}" "${cli_flags[@]+"${cli_flags[@]}"}")
@@ -958,29 +1083,33 @@ resolve_merged_args() {
 }
 
 main() {
-	case "${1:-}" in
-	-h | --help)
-		usage
-		exit 0
-		;;
-	-V | --version)
-		print_version
-		exit 0
-		;;
-	esac
+	# Bootstrap flags that must take effect before config merging.
+	local arg
+	for arg in "$@"; do
+		case "${arg}" in
+		-h | --help)
+			usage
+			exit 0
+			;;
+		-v | --verbose)
+			VERBOSE_MODE="true"
+			;;
+		esac
+	done
 
+	echo ""
 	echo "--- Proxmox VE Template Creation Script ---"
+
+	resolve_merged_args "$@"
+
+	# Parse and populate variables from command-line arguments
+	parse_arguments "${MERGED_ARGS[@]}"
 
 	# Install dependencies
 	install_dependencies
 
 	# Load externally defined patch functions
 	load_patches
-
-	resolve_merged_args "$@"
-
-	# Parse and populate variables from command-line arguments
-	parse_arguments "${MERGED_ARGS[@]}"
 
 	# Validate arguments
 	validate_args
@@ -998,6 +1127,7 @@ main() {
 	create_template
 
 	echo "--- Proxmox VE Template Creation Script ---"
+	echo ""
 }
 
 # Run the main function with all script arguments
