@@ -82,6 +82,8 @@ Provide these on CLI, or via the config file keys `url`, `id`, and `name`.
 | `--snippets-storage <storage>` | Proxmox storage for cloud-init snippets                                                                                 | same as `--disk-storage` |
 | `--patches <patches>`          | Space-separated list of patch names to apply                                                                            | (none)                   |
 | `--script <file>`              | Local shell script to run as the last cloud-init runcmd step                                                            | (none)                   |
+| `--onboot`                     | Start the VM automatically when the Proxmox host boots                                                                  | disabled                 |
+| `--vendor-only`                | Write the final vendor-data file, print its absolute path, and exit before VM creation                                 | disabled                 |
 | `--reboot`                     | Reboot the VM after cloud-init has completed                                                                            | disabled                 |
 | `--config <file\|name>`        | YAML config file path, or a template name resolved from `templates/<name>.{yaml,yml}`; CLI flags override config values | (none)                   |
 | `-h`, `--help`                 | Display this help message                                                                                               | n/a                      |
@@ -140,6 +142,7 @@ user: root
 password: secret # at least one of password or keys required when user is set
 upgrade: true # boolean; equivalent to --upgrade (default is false/disabled)
 script: /root/proxstack/ci-script.sh
+onboot: true # boolean; equivalent to --onboot (default is false/disabled)
 reboot: true # boolean
 
 # --- Packages ---
@@ -213,12 +216,11 @@ patch_fn <vendor_data_file> <image_file> <distro> <distro_family>
 ### Notes and Gotchas
 
 - **`--user` requires credentials.** At least one of `--password` or `--ssh-keys` must also be provided when `--user` is set.
-- **Config path values should be absolute paths.** For `ssh.keys` and `script` in YAML config, use absolute filesystem paths. Relative paths and unexpanded forms like `~` may fail validation as "file not found".
+- **Config path values should be absolute paths.** For `ssh.keys` and `script` in YAML config, use absolute filesystem paths. Relative paths and unexpanded forms like `~` will fail validation as "file not found".
 - **Avoid reserved usernames.** Do not use usernames that clash with existing system groups (e.g. `admin`). Cloud-init fails silently when it tries to create a group that already exists. `root` is a safe exception.
-- **`--ssh-pwauth` root behaviour.** `PermitRootLogin yes` is only written when `--user root` is set. For regular users only `PasswordAuthentication yes` is applied.
-- **Disk format support varies by storage type.** Use `raw` for `lvmthin` and `rbd`; `qcow2` requires directory-based storage (`dir`, `nfs`, `cifs`).
+- **Disk format support varies by storage type.** Check the Proxmox docs.
 - **Image caching.** Downloaded images are stored in `images/` and reused on subsequent runs. Delete the file manually to force a fresh download.
-- **Snippets storage must declare `snippets` content.** The storage must list `snippets` in its `content` field in `/etc/pve/storage.cfg`, otherwise the script exits with a validation error.
+- **Snippets storage must support `snippets` content type.** The storage must list `snippets` in its `content` field in `/etc/pve/storage.cfg`, otherwise the script exits with a validation error.
 - **VM ID must not already exist.** The script exits early if the given ID is already in use in Proxmox.
 - **`qemu-guest-agent` is always installed** and enabled on every template, regardless of other options.
 
@@ -248,19 +250,31 @@ patch_fn <vendor_data_file> <image_file> <distro> <distro_family>
   --user root \
   --password secret \
   --ssh-keys ~/.ssh/authorized_keys \
-  --memory 4096 --cores 4 \
+  --upgrade \
+  --memory 4096 \
+  --cores 4 \
+  --cpu host \
+  --display std \
+  --net-bridge vmbr0 \
+  --net-vlan 100 \
+  --disk-storage local \
+  --snippets-storage local \
+  --disk-size 32G \
+  --disk-bus scsi \
   --disk-scsihw virtio-scsi-single \
-  --net-bridge vmbr0 --net-vlan 100 \
-  --disk-storage local --snippets-storage local \
-  --disk-size 32G --disk-bus scsi --disk-format qcow2 \
+  --disk-format qcow2 \
+  --disk-flags "discard=on" \
   --timezone Europe/Berlin \
-  --keyboard-layout de --keyboard-variant nodeadkeys \
+  --keyboard-layout de \
+  --keyboard-variant nodeadkeys \
   --locale de_DE.UTF-8 \
   --dns-servers "1.1.1.1 8.8.8.8" \
   --dns-domains "home.arpa" \
   --packages "git nginx" \
   --ssh-pwauth \
+  --patches "patch1 patch2" \
   --script ./ci-script.sh \
+  --onboot \
   --reboot
 ```
 

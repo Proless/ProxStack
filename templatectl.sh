@@ -82,9 +82,11 @@ PACKAGES=""                   # Space-separated list of packages to install insi
 PATCHES="ssh keyboard locale" # Space-separated list of patches to apply
 SCRIPT=""                     # Local script file to write via cloud-init and run as final runcmd step
 REBOOT="false"                # Reboot VM after cloud-init completes
+ONBOOT="0"                    # Start VM automatically on Proxmox host boot
 
-# Metadata
-VERBOSE_MODE="false"
+# Internal variables
+VENDOR_ONLY="false"  # Write vendor-data file and exit before VM creation
+VERBOSE_MODE="false" # Enable verbose mode for debugging
 
 # ==============================================================================
 # CLOUD-INIT VENDOR DATA
@@ -255,6 +257,7 @@ configure_vm() {
 		--ciupgrade "${UPGRADE}"
 		--cicustom "vendor=${SNIPPETS_STORAGE_CONFIG[name]}:snippets/ci-vendor-data-${ID}.yml"
 		--ipconfig0 "ip=dhcp"
+		--onboot "${ONBOOT}"
 	)
 
 	# scsihw only applies to scsi bus.
@@ -305,6 +308,12 @@ create_template() {
 		echo "#cloud-config"
 		cat "${tmp_yaml}"
 	} >"${vendor_data_file}"
+
+	if [[ "${VENDOR_ONLY}" == "true" ]]; then
+		rm -f "${tmp_yaml}" "${image_copy}"
+		realpath "${vendor_data_file}"
+		return 0
+	fi
 
 	# Prepare the disk
 	prepare_disk "${image_copy}"
@@ -599,7 +608,7 @@ parse_arguments() {
 			shift 2
 			;;
 		--patches)
-			PATCHES="${2}"
+			PATCHES+=" ${2}"
 			shift 2
 			;;
 		--script)
@@ -608,6 +617,14 @@ parse_arguments() {
 			;;
 		--reboot)
 			REBOOT="true"
+			shift
+			;;
+		--onboot)
+			ONBOOT="1"
+			shift
+			;;
+		--vendor-only)
+			VENDOR_ONLY="true"
 			shift
 			;;
 		-v | --verbose)
@@ -639,7 +656,7 @@ parse_arguments() {
 validate_args() {
 	# Validate required parameters
 	require_arg_number "${ID}" "id (--id)"
-	if qm status "${ID}" &>/dev/null; then
+	if [[ "${VENDOR_ONLY}" != "true" ]] && qm status "${ID}" &>/dev/null; then
 		die "ID ${ID} already exists. Please choose a different ID."
 	fi
 
@@ -747,7 +764,7 @@ quiet_run_ext() {
 }
 
 die() {
-	echo "Error: $*" >&2
+	echo "$*" >&2
 	exit 1
 }
 
@@ -791,6 +808,8 @@ usage() {
 	echo "  --patches <patches>            Space-separated list of patch names to apply"
 	echo "  --script <file>                Local shell script to run as the last cloud-init runcmd step"
 	echo "  --reboot                       Reboot the VM after cloud-init has completed"
+	echo "  --onboot                       Start VM automatically when Proxmox host boots (default: disabled)"
+	echo "  --vendor-only                  Write the final vendor-data file, print its absolute path, and exit before VM creation"
 	echo "  --config <file|name>           YAML config file path, or a template name resolved from templates/<name>.{yaml,yml}; CLI flags override config values"
 	echo "  -v,  --verbose                 Enable verbose mode"
 	echo "  -h,  --help                    Display this help message"
@@ -930,6 +949,7 @@ build_args_from_config() {
 	_cfg_read '.upgrade' "--upgrade" bool
 	_cfg_read '.script' "--script" string
 	_cfg_read '.reboot' "--reboot" bool
+	_cfg_read '.onboot' "--onboot" bool
 
 	# packages:
 	_cfg_read '.packages' "--packages" list
@@ -978,7 +998,7 @@ apply_patches() {
 	for patch in "${patches_array[@]}"; do
 		if declare -f "${patch}" >/dev/null; then
 			echo "Applying patch ${patch}..."
-			"${patch}" "${vendor_data_file}" "${image_file}" "${DISTRO}" "${DISTRO_FAMILY}"
+			quiet_run "${patch}" "${vendor_data_file}" "${image_file}" "${DISTRO}" "${DISTRO_FAMILY}"
 		else
 			echo "Warning: Unknown patch '${patch}' specified. Skipping."
 		fi
