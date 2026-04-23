@@ -729,10 +729,6 @@ validate_distro() {
 }
 
 # ==============================================================================
-# MAIN
-# ==============================================================================
-
-# ==============================================================================
 # UTILITY
 # ==============================================================================
 
@@ -843,9 +839,31 @@ build_args_from_config() {
 	local config_file="${1}"
 	local -n _out_args="${2}"
 
+	_resolve_config_path() {
+		local raw_path="${1}"
+		local expanded_path
+
+		case "${raw_path}" in
+		"~")
+			expanded_path="${HOME}"
+			;;
+		\~/*)
+			expanded_path="${HOME}/${raw_path:2}"
+			;;
+		/*)
+			expanded_path="${raw_path}"
+			;;
+		*)
+			expanded_path="${PWD}/${raw_path}"
+			;;
+		esac
+
+		realpath -m "${expanded_path}"
+	}
+
 	# Helper: read a yq path and append CLI argument based on type (string, bool, or list)
 	_cfg_read() {
-		local yq_path="${1}" flag="${2}" type="${3}" output exit_code read_type read_value
+		local yq_path="${1}" flag="${2}" type="${3}" output exit_code read_type read_value resolved_value
 		echo "Reading config key '${yq_path}' for flag '${flag}'..."
 
 		# Helper to safely execute yq and capture exit code
@@ -890,6 +908,14 @@ build_args_from_config() {
 			fi
 			echo "  Setting ${flag}=${read_value}"
 			_out_args+=("${flag}" "${read_value}")
+			;;
+		path)
+			if [[ "${read_type}" != "string" ]]; then
+				die "Invalid config key '${yq_path}': expected string path but got '${read_type}'"
+			fi
+			resolved_value="$(_resolve_config_path "${read_value}")"
+			echo "  Setting ${flag}=${resolved_value}"
+			_out_args+=("${flag}" "${resolved_value}")
 			;;
 		number)
 			if [[ "${read_type}" != "number" ]]; then
@@ -947,7 +973,7 @@ build_args_from_config() {
 	_cfg_read '.user' "--user" string
 	_cfg_read '.password' "--password" string
 	_cfg_read '.upgrade' "--upgrade" bool
-	_cfg_read '.script' "--script" string
+	_cfg_read '.script' "--script" path
 	_cfg_read '.reboot' "--reboot" bool
 	_cfg_read '.onboot' "--onboot" bool
 
@@ -970,7 +996,7 @@ build_args_from_config() {
 
 	# ssh:
 	_cfg_read '.ssh.pwauth' "--ssh-pwauth" bool
-	_cfg_read '.ssh.keys' "--ssh-keys" string
+	_cfg_read '.ssh.keys' "--ssh-keys" path
 
 	# Top-level misc:
 	_cfg_read '.patches' "--patches" list
@@ -1097,6 +1123,10 @@ resolve_merged_args() {
 		MERGED_ARGS=("${cli_flags[@]+"${cli_flags[@]}"}")
 	fi
 }
+
+# ==============================================================================
+# MAIN
+# ==============================================================================
 
 main() {
 	# Bootstrap flags that must take effect before config merging.
