@@ -2,20 +2,6 @@
 
 ProxStack is a an collection of scripts and workflows for managing Proxmox VE.
 
-## Repository Layout
-
-```text
-.
-├── templatectl.sh
-├── patches/
-│   ├── ssh.sh
-│   ├── keyboard.sh
-│   └── locale.sh
-├── templates/        ← YAML config files for --config name lookup
-├── images/           ← downloaded cloud images (auto-created)
-└── stacks/
-```
-
 ---
 
 ## templatectl.sh
@@ -57,7 +43,7 @@ Provide these on CLI, or via the config file keys `url`, `id`, and `name`.
 | `--name <name>`                | Name for the template                                                                                                   | (none)                   |
 | `--user <user>`                | Set the cloud-init user                                                                                                 | (none)                   |
 | `--password <password>`        | Set the cloud-init password                                                                                             | (none)                   |
-| `--upgrade`                    | Enable cloud-init package upgrade behavior                                                                              | disabled (`0`)           |
+| `--upgrade`                    | Enable cloud-init package upgrade behavior                                                                              | disabled                 |
 | `--net-bridge <bridge>`        | Network bridge for VM                                                                                                   | `vmbr0`                  |
 | `--net-vlan <id>`              | VLAN tag for VM network interface (1-4094)                                                                              | (none)                   |
 | `--memory <mb>`                | Memory in MB                                                                                                            | `2048`                   |

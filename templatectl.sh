@@ -19,6 +19,9 @@ declare -a SUPPORTED_DISTROS=("debian" "ubuntu" "fedora" "rhel")
 declare -A DISK_STORAGE_CONFIG=()
 declare -A SNIPPETS_STORAGE_CONFIG=()
 
+# Distro information extracted from image
+declare -A DISTRO_INFO=()
+
 # Keyboard configuration
 declare -A KEYBOARD_CONFIG=(
 	[layout]=""  # Keyboard layout
@@ -64,9 +67,7 @@ declare -a MERGED_ARGS=() # Final merged arguments built from config defaults + 
 ID=""               # ID for the template
 URL=""              # Cloud Image URL
 NAME=""             # Name for the template
-DISTRO=""           # Raw distro detected from the image
 IMAGE_FILE=""       # Local path to the downloaded image file
-DISTRO_FAMILY=""    # Normalized distro family used for feature selection
 USER=""             # Cloud-init user
 PASSWORD=""         # Cloud-init password
 UPGRADE="0"         # Cloud-init package upgrade behavior: 1=enable, 0=disable
@@ -112,7 +113,7 @@ ci_add_qemu_guest_agent() {
 	yq -i -y ".packages += [\"qemu-guest-agent\"]" "${vendor_data_file}"
 
 	# Add distro-specific commands to enable and start qemu-guest-agent
-	case "${DISTRO_FAMILY}" in
+	case "${DISTRO_INFO[family]}" in
 	debian | ubuntu | fedora | rhel)
 		yq -i -y ".runcmd += [\"systemctl enable qemu-guest-agent\"]" "${vendor_data_file}"
 		yq -i -y ".runcmd += [\"systemctl start qemu-guest-agent\"]" "${vendor_data_file}"
@@ -716,16 +717,40 @@ validate_storage() {
 validate_distro() {
 	echo "Detecting distro from image..."
 
-	# Detect the distro using virt-inspector
-	DISTRO=$(virt-inspector --no-applications -a "${IMAGE_FILE}" 2>/dev/null | grep '<distro>' | head -1 | sed -E 's/.*<distro>([^<]+)<\/distro>.*/\1/')
+	# Run virt-inspector once and capture full XML output
+	local inspector_xml
+	inspector_xml=$(virt-inspector --no-applications -a "${IMAGE_FILE}" 2>/dev/null)
 
-	if [[ -z "${DISTRO}" ]]; then
+	# Helper: extract a single XML tag value; returns empty string if not found
+	_extract_xml_field() {
+		local tag="${1}"
+		local value
+		value=$(echo "${inspector_xml}" | grep "<${tag}>" | head -1 | sed -E "s/.*<${tag}>([^<]+)<\/${tag}>.*/\1/")
+		echo "${value}"
+	}
+
+	# Detect the distro
+	DISTRO_INFO[name]=$(_extract_xml_field "distro")
+
+	if [[ -z "${DISTRO_INFO[name]}" ]]; then
 		die "Failed to detect distro from image"
 	fi
 
-	DISTRO_FAMILY=$(normalize_distro "${DISTRO}") || die "Unsupported distro '${DISTRO}'. Supported distro families: ${SUPPORTED_DISTROS[*]}"
+	DISTRO_INFO[family]=$(normalize_distro "${DISTRO_INFO[name]}") || die "Unsupported distro '${DISTRO_INFO[name]}'. Supported distro families: ${SUPPORTED_DISTROS[*]}"
 
-	echo "Detected distro: ${DISTRO} (family: ${DISTRO_FAMILY})"
+	# Populate DISTRO_INFO array; fields default to empty if not present
+	DISTRO_INFO[arch]=$(_extract_xml_field "arch")
+	DISTRO_INFO[osinfo]=$(_extract_xml_field "osinfo")
+	DISTRO_INFO[product_name]=$(_extract_xml_field "product_name")
+	DISTRO_INFO[package_format]=$(_extract_xml_field "package_format")
+	DISTRO_INFO[package_management]=$(_extract_xml_field "package_management")
+
+	echo "Detected distro: ${DISTRO_INFO[product_name]} (family: ${DISTRO_INFO[family]})"
+	[[ -n "${DISTRO_INFO[arch]}" ]]               && echo "  arch:               ${DISTRO_INFO[arch]}"
+	[[ -n "${DISTRO_INFO[osinfo]}" ]]             && echo "  osinfo:             ${DISTRO_INFO[osinfo]}"
+	[[ -n "${DISTRO_INFO[product_name]}" ]]       && echo "  product_name:       ${DISTRO_INFO[product_name]}"
+	[[ -n "${DISTRO_INFO[package_format]}" ]]     && echo "  package_format:     ${DISTRO_INFO[package_format]}"
+	[[ -n "${DISTRO_INFO[package_management]}" ]] && echo "  package_management: ${DISTRO_INFO[package_management]}"
 }
 
 # ==============================================================================
@@ -1024,7 +1049,7 @@ apply_patches() {
 	for patch in "${patches_array[@]}"; do
 		if declare -f "${patch}" >/dev/null; then
 			echo "Applying patch ${patch}..."
-			quiet_run "${patch}" "${vendor_data_file}" "${image_file}" "${DISTRO}" "${DISTRO_FAMILY}"
+			quiet_run "${patch}" "${vendor_data_file}" "${image_file}" "${DISTRO_INFO[name]}" "${DISTRO_INFO[family]}"
 		else
 			echo "Warning: Unknown patch '${patch}' specified. Skipping."
 		fi
