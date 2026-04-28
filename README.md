@@ -14,7 +14,7 @@ Creates a Proxmox VE template for a given Linux cloud image.
 - Detects distro family (`debian`, `ubuntu`, `fedora`, `rhel`).
 - Creates and configures a VM in Proxmox.
 - Builds cloud-init vendor-data (`packages`, `runcmd`, `write_files`, etc.).
-- Applies built-in and optional patches.
+- Applies only explicitly requested patches.
 - Converts the VM into a reusable template.
 
 ### Usage
@@ -55,7 +55,6 @@ Provide these on CLI, or via the config file keys `url`, `id`, and `name`.
 | `--keyboard-variant <variant>` | Keyboard variant (e.g., intl)                                                                                           | (none)                   |
 | `--locale <locale>`            | Locale (e.g., en_US.UTF-8, de_DE.UTF-8)                                                                                 | (none)                   |
 | `--ssh-keys <file>`            | Path to file with public SSH keys (one per line, OpenSSH format)                                                        | (none)                   |
-| `--ssh-pwauth`                 | Enable SSH password authentication; if `--user root`, also allow root password login                                    | disabled                 |
 | `--disk-size <size>`           | Disk size (e.g., 32G, 50G, 6144M)                                                                                       | image default            |
 | `--disk-bus <type>`            | Disk bus/controller type: `scsi`, `virtio`, `sata`, `ide`                                                               | `scsi`                   |
 | `--disk-storage <storage>`     | Proxmox storage for VM disk                                                                                             | `local-lvm`              |
@@ -160,7 +159,6 @@ dns:
 # --- SSH ---
 ssh:
   keys: /root/.ssh/authorized_keys
-  pwauth: true # boolean; equivalent to --ssh-pwauth
 
 # --- Custom patches ---
 patches:
@@ -176,20 +174,15 @@ patches:
 
 Patch functions are sourced automatically from `patches/*.sh`.
 
-**Built-in patches (always applied):**
+**Patches are opt-in only (none are applied by default):**
 
-| Patch      | Behaviour                                                             |
-| ---------- | --------------------------------------------------------------------- |
-| `ssh`      | Enables and starts the SSH service (distro-aware: `ssh` vs `sshd`)    |
-| `keyboard` | Applies keyboard layout using the correct mechanism per distro family |
-| `locale`   | Applies locale using the correct mechanism per distro family          |
-
-**Optional patches:**
-
-| Patch        | How to activate                                | Behaviour                                                                                                                                                                                       |
-| ------------ | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ssh_pwauth` | `--ssh-pwauth` or `ssh.pwauth: true` in config | Enables SSH password authentication; writes a high-priority drop-in under `/etc/ssh/sshd_config.d/` to avoid being overridden by cloud-init; if user is `root`, also sets `PermitRootLogin yes` |
-| _custom_     | `--patches "name"` or `patches:` in config     | Any function defined in `patches/*.sh`                                                                                                                                                          |
+| Patch        | How to activate                                  | Behaviour                                                                                                                                                                                       |
+| ------------ | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ssh`        | `--patches "ssh"` or `patches:` in config        | Enables and starts the SSH service (distro-aware: `ssh` vs `sshd`)                                                                                                                              |
+| `keyboard`   | `--patches "keyboard"` or `patches:` in config   | Applies keyboard layout using the correct mechanism per distro family                                                                                                                           |
+| `locale`     | `--patches "locale"` or `patches:` in config     | Applies locale using the correct mechanism per distro family                                                                                                                                    |
+| `ssh_pwauth` | `--patches "ssh_pwauth"` or `patches:` in config | Enables SSH password authentication; writes a high-priority drop-in under `/etc/ssh/sshd_config.d/` to avoid being overridden by cloud-init; if user is `root`, also sets `PermitRootLogin yes` |
+| _custom_     | `--patches "name"` or `patches:` in config       | Any function defined in `patches/*.sh`                                                                                                                                                          |
 
 All patch functions receive the same four arguments in this order:
 
@@ -257,8 +250,7 @@ patch_fn <vendor_data_file> <image_file> <distro> <distro_family>
   --dns-servers "1.1.1.1 8.8.8.8" \
   --dns-domains "home.arpa" \
   --packages "git nginx" \
-  --ssh-pwauth \
-  --patches "patch1 patch2" \
+  --patches "ssh keyboard locale ssh_pwauth patch1 patch2" \
   --script ./ci-script.sh \
   --onboot \
   --reboot

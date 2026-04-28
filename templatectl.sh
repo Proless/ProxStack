@@ -46,8 +46,7 @@ declare -A NET_CONFIG=(
 
 # SSH configuration
 declare -A SSH_CONFIG=(
-	[keys]=""    # Path to file with public SSH keys
-	[pwauth]="0" # Enable SSH password authentication
+	[keys]="" # Path to file with public SSH keys
 )
 
 # DNS configuration
@@ -79,11 +78,11 @@ TIMEZONE=""         # Timezone
 LOCALE=""           # Locale
 
 # Advanced options
-PACKAGES=""                   # Space-separated list of packages to install inside the VM template
-PATCHES="ssh keyboard locale" # Space-separated list of patches to apply
-SCRIPT=""                     # Local script file to write via cloud-init and run as final runcmd step
-REBOOT="false"                # Reboot VM after cloud-init completes
-ONBOOT="0"                    # Start VM automatically on Proxmox host boot
+PACKAGES=""    # Space-separated list of packages to install inside the VM template
+PATCHES=""     # Space-separated list of patches to apply (none by default)
+SCRIPT=""      # Local script file to write via cloud-init and run as final runcmd step
+REBOOT="false" # Reboot VM after cloud-init completes
+ONBOOT="0"     # Start VM automatically on Proxmox host boot
 
 # Internal variables
 VENDOR_ONLY="false"  # Write vendor-data file and exit before VM creation
@@ -587,11 +586,6 @@ parse_arguments() {
 			SSH_CONFIG[keys]="${2}"
 			shift 2
 			;;
-		--ssh-pwauth)
-			SSH_CONFIG[pwauth]="1"
-			PATCHES+=" ssh_pwauth"
-			shift
-			;;
 		--dns-servers)
 			DNS_CONFIG[servers]="${2}"
 			shift 2
@@ -746,10 +740,10 @@ validate_distro() {
 	DISTRO_INFO[package_management]=$(_extract_xml_field "package_management")
 
 	echo "Detected distro: ${DISTRO_INFO[product_name]} (family: ${DISTRO_INFO[family]})"
-	[[ -n "${DISTRO_INFO[arch]}" ]]               && echo "  arch:               ${DISTRO_INFO[arch]}"
-	[[ -n "${DISTRO_INFO[osinfo]}" ]]             && echo "  osinfo:             ${DISTRO_INFO[osinfo]}"
-	[[ -n "${DISTRO_INFO[product_name]}" ]]       && echo "  product_name:       ${DISTRO_INFO[product_name]}"
-	[[ -n "${DISTRO_INFO[package_format]}" ]]     && echo "  package_format:     ${DISTRO_INFO[package_format]}"
+	[[ -n "${DISTRO_INFO[arch]}" ]] && echo "  arch:               ${DISTRO_INFO[arch]}"
+	[[ -n "${DISTRO_INFO[osinfo]}" ]] && echo "  osinfo:             ${DISTRO_INFO[osinfo]}"
+	[[ -n "${DISTRO_INFO[product_name]}" ]] && echo "  product_name:       ${DISTRO_INFO[product_name]}"
+	[[ -n "${DISTRO_INFO[package_format]}" ]] && echo "  package_format:     ${DISTRO_INFO[package_format]}"
 	[[ -n "${DISTRO_INFO[package_management]}" ]] && echo "  package_management: ${DISTRO_INFO[package_management]}"
 }
 
@@ -815,7 +809,6 @@ usage() {
 	echo "  --keyboard-variant <variant>   Keyboard variant (e.g., intl)"
 	echo "  --locale <locale>              Locale (e.g., en_US.UTF-8, de_DE.UTF-8)"
 	echo "  --ssh-keys <file>              Path to file with public SSH keys (one per line, OpenSSH format)"
-	echo "  --ssh-pwauth                   Enable SSH password authentication; if --user root, also allow root password login"
 	echo "  --disk-size <size>             Disk size (e.g., 32G, 50G, 6144M)"
 	echo "  --disk-bus <type>              Disk bus/controller type: scsi (default), virtio, sata, ide"
 	echo "  --disk-storage <storage>       Proxmox storage for VM disk (default: local-lvm)"
@@ -826,7 +819,7 @@ usage() {
 	echo "  --dns-servers <servers>        Space-separated DNS servers (e.g., '10.10.10.10 9.9.9.9')"
 	echo "  --dns-domains <domains>        Space-separated domain names (e.g., 'example.com internal.local')"
 	echo "  --snippets-storage <storage>   Proxmox storage for cloud-init snippets (default: same as --disk-storage)"
-	echo "  --patches <patches>            Space-separated list of patch names to apply"
+	echo "  --patches <patches>            Space-separated list of patch names to apply (default: none)"
 	echo "  --script <file>                Local shell script to run as the last cloud-init runcmd step"
 	echo "  --reboot                       Reboot the VM after cloud-init has completed"
 	echo "  --onboot                       Start VM automatically when Proxmox host boots (default: disabled)"
@@ -1020,7 +1013,6 @@ build_args_from_config() {
 	_cfg_read '.dns.domains' "--dns-domains" list
 
 	# ssh:
-	_cfg_read '.ssh.pwauth' "--ssh-pwauth" bool
 	_cfg_read '.ssh.keys' "--ssh-keys" path
 
 	# Top-level misc:
