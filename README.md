@@ -91,8 +91,6 @@ Instead of passing every option on the command line you can store them in a YAML
 Config values act as **defaults**. Any flag passed on the CLI **overrides** the corresponding config value.  
 This means you can share a base config and override individual values per invocation.
 
-> **Note:** Config values act as defaults. Any CLI flag overrides the corresponding config value, including `--url`, `--id`, and `--name`.
-
 #### Full config schema
 
 ```yaml
