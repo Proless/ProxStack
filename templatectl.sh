@@ -80,7 +80,6 @@ LOCALE=""           # Locale
 # Advanced options
 PACKAGES=""    # Space-separated list of packages to install inside the VM template
 PATCHES=""     # Space-separated list of patches to apply (none by default)
-SCRIPT=""      # Local script file to write via cloud-init and run as final runcmd step
 REBOOT="false" # Reboot VM after cloud-init completes
 ONBOOT="0"     # Start VM automatically on Proxmox host boot
 
@@ -148,20 +147,6 @@ ci_add_localization() {
 	fi
 }
 
-ci_add_script() {
-	local vendor_data_file="${1}"
-
-	[[ -z "${SCRIPT}" ]] && return 0
-
-	local script_path="/usr/local/sbin/ci_script.sh"
-	local script_b64
-
-	script_b64=$(base64 -w 0 "${SCRIPT}")
-
-	SCRIPT_B64="${script_b64}" yq -i -y '.write_files += [{"path":"/usr/local/sbin/ci_script.sh","owner":"root:root","permissions":"0755","encoding":"b64","content": env.SCRIPT_B64}]' "${vendor_data_file}"
-	yq -i -y ".runcmd += [\"${script_path}\"]" "${vendor_data_file}"
-}
-
 ci_add_reboot() {
 	local vendor_data_file="${1}"
 
@@ -179,7 +164,6 @@ ci_build_vendor_data() {
 	ci_add_extra_packages "${vendor_data_file}"
 	ci_add_localization "${vendor_data_file}"
 	ci_add_reboot "${vendor_data_file}"
-	ci_add_script "${vendor_data_file}"
 }
 
 # ==============================================================================
@@ -606,10 +590,6 @@ parse_arguments() {
 			PATCHES+=" ${2}"
 			shift 2
 			;;
-		--script)
-			SCRIPT="${2}"
-			shift 2
-			;;
 		--reboot)
 			REBOOT="true"
 			shift
@@ -676,8 +656,6 @@ validate_args() {
 	else
 		echo "Warning: No cloud-init user provided"
 	fi
-
-	[[ -n "${SCRIPT}" ]] && require_arg_file "${SCRIPT}" "script (--script)"
 
 	[[ -n "${NET_CONFIG[vlan]}" ]] && require_arg_vlan "${NET_CONFIG[vlan]}" "vlan (--net-vlan)"
 
@@ -820,7 +798,6 @@ usage() {
 	echo "  --dns-domains <domains>        Space-separated domain names (e.g., 'example.com internal.local')"
 	echo "  --snippets-storage <storage>   Proxmox storage for cloud-init snippets (default: same as --disk-storage)"
 	echo "  --patches <patches>            Space-separated list of patch names to apply (default: none)"
-	echo "  --script <file>                Local shell script to run as the last cloud-init runcmd step"
 	echo "  --reboot                       Reboot the VM after cloud-init has completed"
 	echo "  --onboot                       Start VM automatically when Proxmox host boots (default: disabled)"
 	echo "  --vendor-only                  Write the final vendor-data file, print its absolute path, and exit before VM creation"
@@ -991,7 +968,6 @@ build_args_from_config() {
 	_cfg_read '.user' "--user" string
 	_cfg_read '.password' "--password" string
 	_cfg_read '.upgrade' "--upgrade" bool
-	_cfg_read '.script' "--script" path
 	_cfg_read '.reboot' "--reboot" bool
 	_cfg_read '.onboot' "--onboot" bool
 

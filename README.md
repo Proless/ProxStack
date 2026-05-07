@@ -66,7 +66,6 @@ Provide these on CLI, or via the config file keys `url`, `id`, and `name`.
 | `--dns-domains <domains>`      | Space-separated domain names (e.g., 'example.com internal.local')                                                       | (none)                   |
 | `--snippets-storage <storage>` | Proxmox storage for cloud-init snippets                                                                                 | same as `--disk-storage` |
 | `--patches <patches>`          | Space-separated list of patch names to apply                                                                            | (none)                   |
-| `--script <file>`              | Local shell script to run as the last cloud-init runcmd step                                                            | (none)                   |
 | `--onboot`                     | Start the VM automatically when the Proxmox host boots                                                                  | disabled                 |
 | `--vendor-only`                | Write the final vendor-data file, print its absolute path, and exit before VM creation                                  | disabled                 |
 | `--reboot`                     | Reboot the VM after cloud-init has completed                                                                            | disabled                 |
@@ -124,7 +123,6 @@ snippets:
 user: root
 password: secret # at least one of password or keys required when user is set
 upgrade: true # boolean; equivalent to --upgrade (default is false/disabled)
-script: /root/proxstack/ci-script.sh
 onboot: true # boolean; equivalent to --onboot (default is false/disabled)
 reboot: true # boolean
 
@@ -193,7 +191,7 @@ patch_fn <vendor_data_file> <image_file> <distro> <distro_family>
 ### Notes and Gotchas
 
 - **`--user` requires credentials.** At least one of `--password` or `--ssh-keys` must also be provided when `--user` is set.
-- **Config path values may be absolute, relative, or home-relative.** For `ssh.keys` and `script` in YAML config, `/abs/path`, `relative/path`, `./relative/path`, `../relative/path`, `~`, and `~/path` are resolved before validation.
+- **Config path values may be absolute, relative, or home-relative.** For `ssh.keys` in YAML config, `/abs/path`, `relative/path`, `./relative/path`, `../relative/path`, `~`, and `~/path` are resolved before validation.
 - **Avoid reserved usernames.** Do not use usernames that clash with existing system groups (e.g. `admin`). Cloud-init fails silently when it tries to create a group that already exists. `root` is a safe exception.
 - **Disk format support varies by storage type.** Check the Proxmox docs.
 - **Image caching.** Downloaded images are stored in `images/` and reused on subsequent runs. Delete the file manually to force a fresh download.
